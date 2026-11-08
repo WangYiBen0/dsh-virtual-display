@@ -1,0 +1,6 @@
+node_modules/
+.scratch/
+e2e-run/
+.dsh-virtual-display/
+*.png
+!icon.svg

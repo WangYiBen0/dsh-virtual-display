@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Virtual display",
+    "description": "Provision a throwaway virtual display and capture a real, rendered instance without disturbing the session you are working in."
+  }
+}
