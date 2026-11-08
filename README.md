@@ -1,5 +1,7 @@
 # dsh-virtual-display
 
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
+
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that gives the agent a
 **private display** to render and screenshot on, so it never has to grab your desktop.
 
