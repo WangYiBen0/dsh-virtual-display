@@ -95,3 +95,13 @@ Both assert on real captured pixels, not just exit codes.
 ## License
 
 MIT
+
+## Gear notes
+
+| Gear | Support | Why it may not work in your environment |
+|------|---------|--------------------------------------|
+| `direct` | ✅ Supported | Uses the host's own compositor. Works on any system with a compositor (Xvfb, niri, etc.). |
+| `container` | ✅ Supported | Requires podman or docker to start a container with a writable runtime directory. Your `/run/user/1001` is **read‑only**, so the container runtime directory cannot be created. You can try: <br>• `export XDG_RUNTIME_DIR=/tmp/xdg-runtime` (set a writable path before starting) <br>• or use a dedicated user with a writable `/run/user/<uid>` |
+| `vm` | ❌ Not supported | Requires `/dev/kvm` (or qemu‑tcg) and a qcow2 overlay. This host has no `/dev/kvm` and no qemu binaries configured for this profile. The VM gear is therefore marked **supported** but **unusable** on this host. |
+
+If you need a VM‑style display, you can instead use `container` with a custom writable runtime directory or use a remote VM and point `virtual_display` at its X11/Wayland socket via the `target` argument.
