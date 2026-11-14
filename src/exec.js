@@ -40,6 +40,8 @@ export const PROVIDERS = {
   niri: ['niri'],
   ironbar: ['ironbar'],
   xdotool: ['xdotool'],
+  wtype: ['wtype'],
+  wlrctl: ['wlrctl'],
   podman: ['podman'],
   docker: ['docker'],
   'qemu-system-x86_64': ['qemu'],

@@ -188,11 +188,17 @@ export class WaylandBackend {
       }
       const actual = findWaylandSocket(opts.runtimeDir)
       if (actual !== undefined) {
+        // wlroots compositors put their control socket in the runtime dir too.
+        // Publishing it in displayEnv means `swaymsg` works from any child
+        // process without the caller having to hunt for the socket path.
+        const swayIpc = findSwaySocket(opts.runtimeDir)
+        const displayEnv = { WAYLAND_DISPLAY: actual, XDG_RUNTIME_DIR: opts.runtimeDir }
+        if (swayIpc !== undefined) displayEnv.SWAYSOCK = swayIpc
         return {
           backend: 'wayland',
           mode: compositor.kind,
           waylandDisplay: actual,
-          displayEnv: { WAYLAND_DISPLAY: actual, XDG_RUNTIME_DIR: opts.runtimeDir },
+          displayEnv,
           sockets: [`${opts.runtimeDir}/${actual}`],
           handle,
           runtimeDir: opts.runtimeDir,
@@ -295,6 +301,22 @@ function firstLine(text) {
  * belongs to the compositor we started — no need to guess the exact name. The
  * `-lock` sidecars and `*.sock` IPC files are skipped.
  */
+/** Find sway's IPC socket, if this compositor publishes one. */
+function findSwaySocket(runtimeDir) {
+  let entries
+  try {
+    entries = readdirSync(runtimeDir)
+  } catch {
+    return undefined
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith('sway-ipc.')) continue
+    if (!entry.endsWith('.sock')) continue
+    return join(runtimeDir, entry)
+  }
+  return undefined
+}
+
 function findWaylandSocket(runtimeDir) {
   let entries
   try {

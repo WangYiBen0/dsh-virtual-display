@@ -11,9 +11,10 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { VirtualDisplaySession } from './session.js'
+import { InputInjector, normalizeInput } from './input.js'
 import { inspectCapabilities, choosePlatform, assertSupported, PLATFORMS, GEARS } from './capabilities.js'
 
-const ACTIONS = ['inspect', 'start', 'capture', 'view', 'stop']
+const ACTIONS = ['inspect', 'start', 'capture', 'input', 'view', 'stop']
 
 /**
  * Clamp one optional numeric argument to an inclusive range.
@@ -50,6 +51,7 @@ export function createVirtualDisplayTool(ctx, options) {
       '- `inspect`: report which platforms and isolation gears (direct/container/vm) actually work on this host, before you commit to one.',
       '- `start`: boot a display, optionally launching a page or program on it. Returns a session id.',
       '- `capture`: render an image from a session, returned as a viewable attachment.',
+      '- `input`: inject synthetic keyboard/mouse events into a session (type, click, scroll).',
       '- `view`: report the exact commands a human can run to watch this session live (no listener is started).',
       '- `stop`: tear a session down.',
       '',
@@ -91,7 +93,25 @@ export function createVirtualDisplayTool(ctx, options) {
       sessionId: {
         type: 'string',
         description:
-          'Session to act on. Required for `capture`, `view`, and `stop`; ignored for `start`.',
+          'Session to act on. Required for `capture`, `input`, `view`, and `stop`; ignored for `start`.',
+      },
+      input: {
+        type: 'object',
+        additionalProperties: true,
+        description: [
+          'Event for `action: "input"`. One of:',
+          '- `{ kind: "text", text, delayMs? }` type characters',
+          '- `{ kind: "key", key }` a key or chord, e.g. "Return", "ctrl+c", "Tab"',
+          '- `{ kind: "click", x, y, button?, count? }` button is left/middle/right',
+          '- `{ kind: "move", x, y }`',
+          '- `{ kind: "scroll", x?, y?, direction: "up"|"down", amount? }`',
+          'Coordinates are display pixels — the same space a `capture` image uses.',
+        ].join('\n'),
+      },
+      captureAfter: {
+        type: 'boolean',
+        description:
+          'For `input`: capture a fresh frame after injecting and return it as an attachment. Defaults to false.',
       },
       // Note: the harness value-schema DSL supports only
       // description/title/default/examples plus type/enum/const/items/
@@ -156,6 +176,7 @@ export function createVirtualDisplayTool(ctx, options) {
             },
           },
           windows: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          input: { type: 'object', additionalProperties: true },
           view: { type: 'object', additionalProperties: true },
           warning: { type: 'string' },
           notes: { type: 'array', items: { type: 'string' } },
@@ -199,6 +220,17 @@ function renderValue(value) {
 
   if (!value.ok) {
     return { type: 'text', text: `virtual_display ${value.action} failed: ${value.error ?? 'unknown error'}` }
+  }
+
+  if (value.action === 'input') {
+    const applied = value.input ?? {}
+    lines.push(
+      `injected ${applied.kind}${applied.characters !== undefined ? ` (${applied.characters} chars)` : ''}` +
+        (applied.x !== undefined ? ` at ${applied.x},${applied.y}` : ''),
+    )
+    if (value.image !== undefined) lines.push(`captured ${value.path} (${value.image.width}x${value.image.height})`)
+    if (value.warning !== undefined) lines.push(`warning: ${value.warning}`)
+    return { type: 'text', text: lines.join('\n') }
   }
 
   if (value.action === 'view') {
@@ -249,6 +281,8 @@ export class VirtualDisplayManager {
           return await this.start(args, exec)
         case 'capture':
           return await this.capture(args, exec)
+        case 'input':
+          return await this.input(args, exec)
         case 'view':
           return await this.view(args)
         case 'stop':
@@ -348,6 +382,55 @@ export class VirtualDisplayManager {
       sessionId,
       session: session.describe(),
       notes,
+    }
+  }
+
+  /**
+   * Inject a synthetic input event into a live session.
+   *
+   * This exists so an agent can *drive* what it rendered — click the menu it
+   * just screenshotted, type into the field it wants to check — instead of only
+   * observing the first frame. Coordinates are display pixels, matching what
+   * `capture` returned, so a caller can read a position off a screenshot.
+   */
+  async input(args, exec) {
+    const { session } = this.require(args.sessionId)
+    const request = normalizeInput(args.input)
+    const injector = new InputInjector(session)
+    const applied = await injector.apply(request)
+
+    // An injection that does not change the frame is indistinguishable from a
+    // no-op, so hand back a fresh capture unless the caller opted out.
+    if (args.captureAfter !== true) {
+      return {
+        action: 'input',
+        ok: true,
+        sessionId: args.sessionId,
+        input: applied,
+        session: session.describe(),
+      }
+    }
+
+    const destPath = args.capturePath ?? join(session.runtimeDir, `input-${Date.now()}.png`)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    const result = await session.capture({
+      destPath,
+      waitMs: clampNumber(args.waitMs, 0, 180000, 5000),
+      settleMs: clampNumber(args.settleMs, 0, 60000, 400),
+      signal: exec?.signal,
+    })
+    const image = await this.attach(result.path)
+
+    return {
+      action: 'input',
+      ok: true,
+      sessionId: args.sessionId,
+      input: applied,
+      path: result.path,
+      image,
+      windows: result.windows,
+      session: session.describe(),
+      warning: session.windowWarning,
     }
   }
 
