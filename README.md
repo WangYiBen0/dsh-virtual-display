@@ -21,6 +21,7 @@ renders into it, and returns the frame as an image attachment. Your session is n
 | `inspect` | Report which platforms and gears actually work **on this host**, before committing to one |
 | `start` | Boot a display, optionally launching a page or program. Returns a session id |
 | `capture` | Render an image from a session, returned as a viewable attachment |
+| `view` | Report the exact commands a human can run to watch this session live |
 | `stop` | Tear a session down |
 
 Plus `platform` (`x11` / `wayland` / `windows` / `macos`), `gear` (`direct` / `container` / `vm`),
@@ -43,18 +44,44 @@ deliberately avoided — so a caller can see, up front, that `vm` is unavailable
 
 ### How the live session is walled off
 
-`src/session.js` builds the child environment from `privateBaseEnv()`, which **deletes
-`DISPLAY`, `WAYLAND_DISPLAY`, and `XAUTHORITY`**. Every renderer is launched against the allocated
-display only. A caller cannot reach your session even by passing an explicit `argv`.
+`src/session.js` builds every child environment from `privateBaseEnv()`, and a renderer can only
+reach the allocated display. Three things are needed, and the plugin does all three:
+
+1. **Drop the live pointers.** `DISPLAY`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `XAUTHORITY`,
+   `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`, and `DESKTOP_SESSION` are deleted.
+2. **Kill the fallback.** Deleting `WAYLAND_DISPLAY` is *not* enough on its own: libwayland then
+   connects to `$XDG_RUNTIME_DIR/wayland-0`, which is usually your compositor. `XDG_RUNTIME_DIR` is
+   therefore rewritten to the session-private directory, which contains no `wayland-0` to find.
+3. **Pin the toolkits.** GTK, Qt, SDL, and Electron each pick a backend from their own variable
+   before they ever look at `DISPLAY`, so `GDK_BACKEND=x11`, `QT_QPA_PLATFORM=xcb`,
+   `SDL_VIDEODRIVER=x11`, `ELECTRON_OZONE_PLATFORM_HINT=x11`, and `CLUTTER_BACKEND=x11` are set —
+   except on a genuine nested Wayland compositor, where clients must stay on Wayland.
+
+A caller cannot reach your session even by passing an explicit `argv`. `.scratch/safety-test.mjs`
+asserts all three properties, including that a caller-supplied `DISPLAY` cannot smuggle it back in.
 
 ## Requirements
 
 Verified against:
 
 - **X11** — `Xvfb` + ImageMagick `import`
-- **Wayland** — nested compositor, falling back to `xwayland` mode
+- **Wayland** — a headless compositor (`sway`, then `mutter`, then `gamescope`/`kwin_wayland`),
+  falling back to `xwayland` mode when none can start
 - **Windows** — PowerShell + .NET GDI+ `CopyFromScreen`
 - **macOS** — `screencapture -x -o -l <windowId>`
+
+Executables are resolved through the harness, then `PATH`, then the profile binaries, then the Nix
+store — matched by **package name**, never by a store hash. Earlier revisions baked absolute
+`/nix/store/…` paths from one probe; every hash had since been garbage-collected, so the fallbacks
+silently resolved to nothing. `inspect` reports `driver` for each platform so a wrong resolution is
+visible rather than mysterious.
+
+Wayland capture needs a compositor that implements `wlr-screencopy`. **sway qualifies; mutter does
+not** — mutter starts fine headless on a GPU-less host (it logs *"Created surfaceless renderer
+without GPU"*) but grim against it fails with *"compositor doesn't support the screen capture
+protocol"*. sway is therefore tried first. Neither `gamescope --backend headless` nor
+`kwin_wayland --virtual` works without a GPU here; they are kept as later attempts, and the
+Xwayland fallback keeps the platform usable regardless.
 
 On hosts without a GPU, chromium may auto-select its Wayland ozone backend and never create an X
 window. This plugin passes `--ozone-platform=x11` explicitly; see
@@ -79,18 +106,23 @@ src/session.js            session lifecycle, private env, paint-polling capture
 src/capabilities.js       host probing, platform/gear selection
 src/gears.js              direct / container / vm
 src/display-number.js     display allocation (:90-:199) with socket + lock checks
-src/exec.js               executable resolution with a nix-store path map
+src/exec.js               executable resolution (harness -> PATH -> profile -> nix name match)
 src/backends/             x11, wayland, windows, macos
 ```
 
 ## Tests
 
 ```sh
-node .scratch/smoke.mjs          # engine E2E, stub subprocess
+node .scratch/smoke.mjs          # X11 E2E: Xvfb -> chromium -> real pixels
+node .scratch/wayland-test.mjs   # Wayland E2E: headless compositor -> grim -> real pixels
+node .scratch/view-test.mjs      # `view` recipes point at the private session, not yours
 node .scratch/manager-test.mjs   # manager E2E: inspect/start/capture/stop/dispose
+node .scratch/safety-test.mjs    # env scrubbing: no live display can be reached
 ```
 
-Both assert on real captured pixels, not just exit codes.
+Each asserts on real captured pixels or real environment properties, not just exit codes.
+`safety-test.mjs` needs nothing installed and is the cheapest regression guard for the plugin's
+core promise.
 
 ## License
 

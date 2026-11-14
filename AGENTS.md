@@ -23,7 +23,7 @@ src/
   capabilities.js         Host probing (inspect), platform/gear selection, support assertions
   gears.js                Isolation gears: direct / container / vm
   display-number.js       X display allocation (:90–:199) with socket + lock checks
-  exec.js                 Command resolution (PATH + known fallbacks), run/collect/spawn helpers
+  exec.js                 Command resolution (harness -> PATH -> profile -> nix name match), run/collect/spawn helpers
   backends/
     x11.js                Xvfb backend (private X server)
     wayland.js            Nested private compositor or xwayland fallback to X11
@@ -44,15 +44,24 @@ Two orthogonal axes compose at runtime:
   - `container`: disposable podman/docker container.
   - `vm`: disposable qemu VM with a qcow2 overlay over a base image.
 
-`VirtualDisplayManager` (in `src/tool.js`) owns live sessions and serializes actions (`inspect | start | capture | stop`). `VirtualDisplaySession` (in `src/session.js`) acquires a backend display, prepares a gear, launches a renderer, and captures frames.
+`VirtualDisplayManager` (in `src/tool.js`) owns live sessions and serializes actions (`inspect | start | capture | view | stop`). `VirtualDisplaySession` (in `src/session.js`) acquires a backend display, prepares a gear, launches a renderer, and captures frames. `viewHints()` produces the human-facing attach recipe for `view`; it executes nothing.
 
 ## Safety model (do not break this)
 
 The plugin’s primary guarantee is **never touching the user’s live session**.
 
-- `privateBaseEnv()` in `src/session.js` deletes `DISPLAY`, `WAYLAND_DISPLAY`, and `XAUTHORITY` from the child environment. Every renderer is launched only against the allocated private display.
 - Backends/launch paths must keep this invariant. Do not pass through live-session display variables, even when accepting explicit `argv`.
 - `inspect` reports the live session variables it deliberately avoided; keep that transparency.
+
+Isolation needs **three** properties; weakening any one breaks the promise:
+
+1. **Drop the live pointers** — `privateBaseEnv()` deletes `DISPLAY`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `XAUTHORITY`, `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`.
+2. **Kill the fallback** — `XDG_RUNTIME_DIR` is deleted too and re-pointed at the session-private directory. Not optional: libwayland falls back to `$XDG_RUNTIME_DIR/wayland-0` when `WAYLAND_DISPLAY` is unset, which is usually the user’s own compositor. Every backend and gear re-sets it before spawning.
+3. **Pin the toolkits** — `GDK_BACKEND`, `QT_QPA_PLATFORM`, `SDL_VIDEODRIVER`, `ELECTRON_OZONE_PLATFORM_HINT`, `CLUTTER_BACKEND` force X11, because those toolkits pick a backend *before* consulting `DISPLAY`.
+
+`renderEnv()` is the only supported way to build a renderer environment; never hand-build one. `pinsToX11()` decides whether the pin applies (X11 backend, or the Wayland backend’s `xwayland` fallback) — a genuinely nested Wayland compositor must **not** be pinned, or Wayland-native clients cannot connect.
+
+`.scratch/safety-test.mjs` asserts all of the above, including that a caller-supplied `DISPLAY` cannot smuggle the live session back in. Run it after touching `privateBaseEnv` or `renderEnv`.
 
 ## Important implementation notes
 
@@ -62,19 +71,31 @@ The plugin’s primary guarantee is **never touching the user’s live session**
 - **Paint detection**: `session.capture()` polls for pixel variety (distinct colors > 1), not just window existence — Chromium can map windows before painting.
 - **Capture result**: `VirtualDisplayManager.capture()` saves the PNG via the attachment store (`ctx.attachments.saveImage`) when available so it renders inline; it still works without an attachment store (file on disk).
 - **Numeric bounds in tool schema**: harness value-schema DSL lacks `minimum/maximum`; bounds are documented in descriptions and enforced by `clampNumber()` in `src/tool.js`.
-- **Command resolution**: `src/exec.js` resolves executables via harness `subprocess.resolveExecutable`, PATH scan, then `KNOWN` fallbacks. Prefer this over hardcoding paths.
+- **Command resolution**: `src/exec.js` resolves executables via harness `subprocess.resolveExecutable`, `PATH` scan, profile bin dirs, then a Nix-store lookup matched by **package name** (`PROVIDERS`), never by store hash. Add new tools to `PROVIDERS` and `BIN_NAMES` rather than hardcoding absolute paths — store hashes are garbage-collected and all previously hardcoded ones were already dead.
+- **Wayland compositor order**: `sway` → `mutter` → `gamescope` → `kwin_wayland`. sway must come first because it is the only one here that both runs GPU-less *and* implements `wlr-screencopy` for grim. mutter starts headless but cannot be captured by grim.
+- **Wayland socket naming**: wlroots compositors ignore `WAYLAND_DISPLAY` and always publish `wayland-1`, so the backend adopts whatever `wayland-*` socket appears in the private runtime dir instead of demanding a specific name.
+- **`view` action**: reports attach commands only; it must never start a listener or spawn a viewer.
 
 ## Development & testing
 
 ```sh
-# Engine E2E (stub subprocess)
+# X11 E2E: Xvfb -> chromium -> real pixels
 node .scratch/smoke.mjs
 
-# Manager E2E: inspect/start/capture/stop/dispose (asserts on real pixels)
+# Wayland E2E: headless compositor -> grim -> real pixels
+node .scratch/wayland-test.mjs
+
+# `view` recipes point at the private session, never the user's
+node .scratch/view-test.mjs
+
+# Manager E2E: inspect/start/capture/stop/dispose
 node .scratch/manager-test.mjs
+
+# Env scrubbing: no live display can be reached (no dependencies needed)
+node .scratch/safety-test.mjs
 ```
 
-Tests live under `.scratch/` in this checkout; they assert on real captured pixels/behavior, not just exit codes. When changing capture, backend, or lifecycle logic, run the relevant scratch tests if the host has the required tools (Xvfb/ImageMagick/chromium).
+Tests live under `.scratch/` in this checkout; they assert on real captured pixels/behavior, not just exit codes. `safety-test.mjs` is the cheapest guard for the isolation promise — run it after any change to `privateBaseEnv`/`renderEnv`. The X11 and Wayland E2E tests need the corresponding tools installed on the host.
 
 ## Editing guidelines
 
