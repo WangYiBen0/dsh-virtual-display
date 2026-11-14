@@ -15,10 +15,15 @@ import { resolveAll } from './exec.js'
 export const PLATFORMS = ['x11', 'wayland', 'windows', 'macos']
 export const GEARS = ['direct', 'container', 'vm']
 
+/** Platforms whose backend is tied to one operating system. */
+const HOST_BOUND = new Set(['windows', 'macos'])
+
 /** Tools each platform's `direct` gear needs. */
 const DIRECT_REQUIREMENTS = {
   x11: ['Xvfb', 'import'],
-  wayland: ['waylandInfo'],
+  // Wayland only needs a capture tool: the compositor itself is optional,
+  // because the backend can fall back to Xwayland-mode on an X server.
+  wayland: ['grim'],
   windows: [],
   macos: [],
 }
@@ -61,11 +66,20 @@ export async function inspectCapabilities(ctx) {
     'Xvfb',
     'import',
     'magick',
+    'identify',
     'xwd',
     'xwininfo',
+    'xdpyinfo',
+    'xprop',
     'waylandInfo',
     'Xwayland',
     'chromium',
+    'grim',
+    'mutter',
+    'gamescope',
+    'kwin_wayland',
+    'sway',
+    'niri',
     'podman',
     'docker',
     'qemu-system-x86_64',
@@ -74,22 +88,44 @@ export async function inspectCapabilities(ctx) {
   const hasDri = existsSync('/dev/dri')
   const hasKvm = existsSync('/dev/kvm')
 
+  // A Wayland `direct` session needs three things: something that can create a
+  // private compositor, a capture tool that speaks screencopy, and a way to
+  // read pixels. Report the compositor separately so `inspect` explains *why*
+  // the platform is unavailable instead of just naming a missing binary.
+  const hasCompositor = tools.mutter ?? tools.sway ?? tools.gamescope ?? tools.kwin_wayland
+
   const platforms = {}
   for (const platform of PLATFORMS) {
     const needed = DIRECT_REQUIREMENTS[platform] ?? []
     const missing = needed.filter((t) => tools[t] === undefined)
-    const hostIs = hostFamily(platform)
+    const compositorMissing = platform === 'wayland' && hasCompositor === undefined
+
+    // windows/macos backends can only run on their own OS. Reporting them as
+    // "supported" on Linux just because they need no extra binaries would be a
+    // lie, and a caller that believed it would get a hard failure at start().
+    const wrongHost = HOST_BOUND.has(platform) && !hostFamily(platform)
+
     platforms[platform] = {
-      supported: missing.length === 0,
-      missing,
-      // Whether this platform is the one the host itself runs.
-      native: hostIs,
-      reason:
-        missing.length > 0
-          ? `missing ${missing.join(', ')}`
-          : platform === 'x11' && !hasDri
-            ? 'software rendering (no /dev/dri)'
+      supported: missing.length === 0 && !compositorMissing && !wrongHost,
+      missing: compositorMissing ? [...missing, 'a headless compositor'] : missing,
+      // Which tool would actually drive this platform, for debugging.
+      driver:
+        platform === 'x11'
+          ? tools.Xvfb
+          : platform === 'wayland'
+            ? hasCompositor
             : undefined,
+      // Whether this platform is the one the host itself runs.
+      native: hostFamily(platform),
+      reason: wrongHost
+        ? `the ${platform} backend can only run on a ${platform} host`
+        : compositorMissing
+          ? 'no headless compositor (mutter/sway/gamescope) and no capture tool chain'
+          : missing.length > 0
+            ? `missing ${missing.join(', ')}`
+            : platform === 'x11' && !hasDri
+              ? 'software rendering (no /dev/dri)'
+              : undefined,
     }
   }
 

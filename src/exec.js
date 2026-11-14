@@ -1,26 +1,49 @@
 // Executable resolution + process helpers shared by every backend.
 //
-// The plugin never hardcodes an absolute interpreter path: it asks the harness
-// `subprocess` service to resolve a command on PATH first, and only then falls
-// back to the well-known locations discovered during the environment probe.
+// The plugin never hardcodes an absolute interpreter path. It asks the harness
+// `subprocess` service first, then scans PATH, then falls back to the profile
+// and Nix store locations that actually exist on this machine.
+//
+// A previous revision hardcoded absolute /nix/store paths recorded from one
+// environment probe. Every one of those hashes has since been garbage-collected,
+// so the fallbacks silently resolved to nothing and `inspect` reported the host
+// as incapable. Package *names* are stable across rebuilds; store hashes are
+// not — so we search by name.
 
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, existsSync, readdirSync } from 'node:fs'
 
-/** Well-known absolute fallbacks, used only if PATH resolution fails. */
-export const KNOWN = {
-  Xvfb: ['/nix/store/pg7d981bvshg7dv3ncq1dr2k9l60795m-xvfb-21.1.24/bin/Xvfb'],
-  import: ['/nix/store/8v793n92zi6apwmazy23gqhc8raszg6p-imagemagick-7.1.2-34/bin/import'],
-  magick: ['/nix/store/8v793n92zi6apwmazy23gqhc8raszg6p-imagemagick-7.1.2-34/bin/magick'],
-  identify: ['/nix/store/8v793n92zi6apwmazy23gqhc8raszg6p-imagemagick-7.1.2-34/bin/identify'],
-  xwd: ['/nix/store/sri5ylclw5pdjzi591ppcm66j9bmihqx-xwd-1.0.10/bin/xwd'],
-  xwininfo: ['/nix/store/yazjxi185xinbzrs9kwgg3fvlkga91mj-xwininfo-1.1.6/bin/xwininfo'],
-  xdpyinfo: ['/nix/store/bdybhrvih3v9lr1plkqlf3lgnqz8w603-xdpyinfo-1.4.0/bin/xdpyinfo'],
-  xprop: ['/nix/store/aambn0gkn2dmk9vfkq6dzzcwnd7wf4yn-xprop-1.2.8/bin/xprop'],
-  Xwayland: ['/run/current-system/sw/bin/Xwayland'],
-  waylandInfo: ['/run/current-system/sw/bin/wayland-info'],
-  chromium: ['/run/current-system/sw/bin/chromium'],
-  grim: [],
-  slurp: [],
+/**
+ * Which packages can provide a given command.
+ *
+ * A command is not always named after its package: `Xvfb` ships in
+ * `xorg-server`, `magick` in `imagemagick`, `kwin_wayland` in `kwin`. This map
+ * is the only host-specific knowledge in the file.
+ */
+export const PROVIDERS = {
+  Xvfb: ['xorg-server'],
+  import: ['imagemagick'],
+  magick: ['imagemagick'],
+  identify: ['imagemagick'],
+  xwd: ['xwd', 'xorg-server'],
+  xwininfo: ['xwininfo'],
+  xdpyinfo: ['xdpyinfo'],
+  xprop: ['xprop'],
+  Xwayland: ['xwayland'],
+  waylandInfo: ['wayland-utils', 'wayland-info'],
+  chromium: ['chromium', 'chromium-browser'],
+  grim: ['grim'],
+  slurp: ['slurp'],
+  mutter: ['mutter'],
+  gamescope: ['gamescope'],
+  kwin_wayland: ['kwin'],
+  sway: ['sway'],
+  niri: ['niri'],
+  ironbar: ['ironbar'],
+  xdotool: ['xdotool'],
+  podman: ['podman'],
+  docker: ['docker'],
+  'qemu-system-x86_64': ['qemu'],
+  swaymsg: ['sway'],
 }
 
 function isExecutable(p) {
@@ -32,25 +55,89 @@ function isExecutable(p) {
   }
 }
 
+/** Directories that hold the user's or the system's current PATH entries. */
+function profileBinDirs() {
+  const dirs = [
+    '/run/current-system/sw/bin',
+    '/nix/var/nix/profiles/default/bin',
+    `${process.env.HOME ?? ''}/.nix-profile/bin`,
+  ]
+  try {
+    for (const user of readdirSync('/etc/profiles/per-user')) {
+      dirs.push(`/etc/profiles/per-user/${user}/bin`)
+    }
+  } catch {
+    // Not a NixOS host, or no per-user profiles. Harmless.
+  }
+  return dirs.filter((d) => d !== '/bin' && existsSync(d))
+}
+
+/**
+ * Logical name -> real binary name, where they differ.
+ *
+ * The plugin addresses tools by a stable camelCase key (`waylandInfo`), but the
+ * Nix store exposes the upstream argv name (`wayland-info`). Resolution has to
+ * look for the real file.
+ */
+export const BIN_NAMES = {
+  waylandInfo: 'wayland-info',
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Reading /nix/store costs ~50-70ms once; cache it for the process lifetime.
+let storeEntries
+
+function nixStoreCandidates(command) {
+  if (!existsSync('/nix/store')) return []
+  storeEntries ??= readdirSync('/nix/store')
+  const bin = BIN_NAMES[command] ?? command
+  const providers = PROVIDERS[command] ?? [command]
+  const names = providers.map(escapeRegExp).join('|')
+  const pattern = new RegExp(`^[a-z0-9]{32}-(${names})-[0-9]`)
+  const found = []
+  for (const entry of storeEntries) {
+    if (!pattern.test(entry)) continue
+    found.push(`/nix/store/${entry}/bin/${bin}`)
+  }
+  return found
+}
+
 /**
  * Resolve one command name to an absolute path.
- * Order: harness resolveExecutable -> PATH scan -> KNOWN fallbacks.
+ *
+ * Order: harness resolveExecutable -> PATH scan -> profile dirs -> Nix store.
+ * Returns undefined when nothing executable was found, so callers can report a
+ * missing dependency instead of spawning a broken argv.
  */
 export async function resolveCommand(ctx, command) {
-  try {
-    const resolved = await ctx.subprocess.resolveExecutable(command)
-    if (resolved !== undefined && resolved !== null && resolved !== '') return resolved
-  } catch {
-    // resolveExecutable throws when the command is absent; fall through.
+  const bin = BIN_NAMES[command] ?? command
+  for (const name of [command, bin]) {
+    try {
+      const resolved = await ctx.subprocess.resolveExecutable(name)
+      if (resolved !== undefined && resolved !== null && resolved !== '') return resolved
+    } catch {
+      // resolveExecutable throws when the command is absent; fall through.
+    }
   }
-  const paths = (process.env.PATH ?? '').split(':').filter(Boolean)
-  for (const dir of paths) {
-    const candidate = `${dir}/${command}`
+
+  const searchDirs = [
+    ...(process.env.PATH ?? '').split(':').filter(Boolean),
+    ...profileBinDirs(),
+  ]
+  for (const dir of searchDirs) {
+    for (const name of new Set([command, bin])) {
+      const candidate = `${dir}/${name}`
+      if (isExecutable(candidate)) return candidate
+    }
+  }
+
+  for (const candidate of nixStoreCandidates(command)) {
     if (isExecutable(candidate)) return candidate
   }
-  for (const candidate of KNOWN[command] ?? []) {
-    if (isExecutable(candidate)) return candidate
-  }
+
   return undefined
 }
 
