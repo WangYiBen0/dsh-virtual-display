@@ -34,22 +34,73 @@ const TOOL_NAMES = [
   'waylandInfo',
   'chromium',
   'grim',
+  'mutter',
+  'sway',
+  'swaymsg',
   'gamescope',
   'kwin_wayland',
+  'niri',
   'podman',
   'docker',
   'qemu-system-x86_64',
 ]
 
 /**
- * The scoped environment every backend starts from. Deleting the live session
- * variables here is what stops an agent from screenshotting the user's desktop.
+ * Toolkits that can silently attach to the *user's* compositor.
+ *
+ * Removing WAYLAND_DISPLAY is not enough on its own: libwayland then falls back
+ * to `$XDG_RUNTIME_DIR/wayland-0`, which is usually exactly the session we are
+ * trying to protect. GTK/Qt/SDL/Electron also pick their backend from these
+ * variables before they ever look at DISPLAY. So each toolkit is pinned to X11
+ * explicitly, and XDG_RUNTIME_DIR is rewritten to the session-private directory
+ * (which contains no `wayland-0` socket to fall back to).
  */
-export function privateBaseEnv(extra = {}) {
+const TOOLKIT_X11 = {
+  GDK_BACKEND: 'x11',
+  QT_QPA_PLATFORM: 'xcb',
+  SDL_VIDEODRIVER: 'x11',
+  ELECTRON_OZONE_PLATFORM_HINT: 'x11',
+  CLUTTER_BACKEND: 'x11',
+  XDG_SESSION_TYPE: 'x11',
+}
+
+/** Session variables that point at the user's live display. */
+const LIVE_SESSION_VARS = [
+  'DISPLAY',
+  'WAYLAND_DISPLAY',
+  'WAYLAND_SOCKET',
+  'XAUTHORITY',
+  // Not a display variable itself, but the *base* every Wayland client falls
+  // back to when WAYLAND_DISPLAY is unset: libwayland would then connect to
+  // $XDG_RUNTIME_DIR/wayland-0, i.e. the user's own compositor. Every backend
+  // and gear re-points this at the session-private directory before spawning.
+  'XDG_RUNTIME_DIR',
+  'XDG_SESSION_TYPE',
+  'XDG_CURRENT_DESKTOP',
+  'DESKTOP_SESSION',
+  'GDK_BACKEND',
+  'QT_QPA_PLATFORM',
+  'SDL_VIDEODRIVER',
+  'ELECTRON_OZONE_PLATFORM_HINT',
+  'CLUTTER_BACKEND',
+]
+
+/**
+ * The scoped environment every renderer starts from. Stripping the live
+ * session variables here is what stops an agent from screenshotting the
+ * user's desktop.
+ *
+ * @param extra - Extra variables merged over the host environment first.
+ * @param options.runtimeDir - Session-private XDG_RUNTIME_DIR to install.
+ * @param options.pin - 'x11' forces every GUI toolkit onto the X11 backend.
+ *   Omit when the display genuinely is a private Wayland compositor, or
+ *   Wayland-native clients would be forced off it.
+ */
+export function privateBaseEnv(extra = {}, options = {}) {
   const env = { ...process.env, ...extra }
-  delete env.WAYLAND_DISPLAY
-  delete env.DISPLAY
-  delete env.XAUTHORITY
+  for (const name of LIVE_SESSION_VARS) delete env[name]
+  if (options.runtimeDir !== undefined) env.XDG_RUNTIME_DIR = options.runtimeDir
+  if (options.pin === 'x11') Object.assign(env, TOOLKIT_X11)
   return env
 }
 
@@ -106,6 +157,11 @@ export class VirtualDisplaySession {
 
     const tools = await resolveAll(ctx, TOOL_NAMES)
     const backend = BACKENDS[options.platform]()
+    // Display servers themselves must not inherit the user's live session, but
+    // they are the thing that *creates* the private display — so they get the
+    // scrubbed environment without a toolkit pin (a compositor that must nest
+    // inside another one still needs to see that parent's WAYLAND_DISPLAY,
+    // which the backend adds back deliberately).
     const env = privateBaseEnv(options.env)
 
     this.backend = backend
@@ -137,7 +193,25 @@ export class VirtualDisplaySession {
 
   /** Environment a renderer should inherit to land on the private display. */
   renderEnv() {
-    return { ...privateBaseEnv(this.options.env), ...this.display.displayEnv }
+    return {
+      ...privateBaseEnv(this.options.env, {
+        runtimeDir: this.runtimeDir,
+        pin: this.pinsToX11() ? 'x11' : undefined,
+      }),
+      ...this.display.displayEnv,
+    }
+  }
+
+  /**
+   * Whether renderers on this display must be pinned to the X11 backend.
+   *
+   * True for the X11 backend and for the Wayland backend's `xwayland` fallback
+   * (whose display *is* an X server). A genuinely nested Wayland compositor
+   * keeps the toolkit defaults, so Wayland-native clients can still connect.
+   */
+  pinsToX11() {
+    const backend = this.display?.backend
+    return backend === 'x11' || (backend === 'wayland' && this.display?.mode === 'xwayland')
   }
 
   /** Launch a renderer (a URL, a binary, or an argv) on the private display. */
@@ -280,6 +354,41 @@ export class VirtualDisplaySession {
       displayEnv: this.display?.displayEnv ?? {},
       sockets: this.display?.sockets ?? [],
       warning: this.windowWarning ?? this.display?.waylandNote,
+    }
+  }
+
+  /**
+   * How the user can look at this display themselves, right now.
+   *
+   * The plugin deliberately ships no streaming server: `capture` returns a
+   * still frame. But an agent iterating on a GUI config ("why is my bar laid
+   * out wrong?") is far more useful when the human can watch, so this reports
+   * the exact commands that would attach a viewer to *this* session. Nothing is
+   * executed — it is a recipe built from the live socket paths.
+   */
+  viewHints() {
+    const env = this.display?.displayEnv ?? {}
+    const exports = Object.entries(env)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ')
+
+    if (this.display?.backend === 'x11' || this.display?.mode === 'xwayland') {
+      return {
+        kind: 'x11',
+        env,
+        stillCapture: `${exports} import -window root shot.png`,
+        liveViewer: `${exports} x11vnc -display ${this.display.display} -localhost -nopw -forever`,
+        note: 'a still frame needs ImageMagick; a live viewer needs x11vnc',
+      }
+    }
+
+    const captureTool = this.tools?.grim === undefined ? 'a screencopy client (grim)' : 'grim'
+    return {
+      kind: 'wayland',
+      env,
+      stillCapture: `${exports} ${captureTool} shot.png`,
+      liveViewer: `${exports} wayvnc 127.0.0.1 5900`,
+      note: 'Wayland viewing needs a screencopy-capable compositor; sway qualifies, mutter does not',
     }
   }
 
