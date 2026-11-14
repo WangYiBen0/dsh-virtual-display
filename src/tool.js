@@ -13,7 +13,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { VirtualDisplaySession } from './session.js'
 import { inspectCapabilities, choosePlatform, assertSupported, PLATFORMS, GEARS } from './capabilities.js'
 
-const ACTIONS = ['inspect', 'start', 'capture', 'stop']
+const ACTIONS = ['inspect', 'start', 'capture', 'view', 'stop']
 
 /**
  * Clamp one optional numeric argument to an inclusive range.
@@ -50,6 +50,7 @@ export function createVirtualDisplayTool(ctx, options) {
       '- `inspect`: report which platforms and isolation gears (direct/container/vm) actually work on this host, before you commit to one.',
       '- `start`: boot a display, optionally launching a page or program on it. Returns a session id.',
       '- `capture`: render an image from a session, returned as a viewable attachment.',
+      '- `view`: report the exact commands a human can run to watch this session live (no listener is started).',
       '- `stop`: tear a session down.',
       '',
       'Pick `platform` (`x11`, `wayland`, `windows`, `macos`) and `gear` (`direct`, `container`, `vm`). Omit both to get the host\'s best private option.',
@@ -89,7 +90,8 @@ export function createVirtualDisplayTool(ctx, options) {
       },
       sessionId: {
         type: 'string',
-        description: 'Session to act on. Required for `capture` and `stop`; ignored for `start`.',
+        description:
+          'Session to act on. Required for `capture`, `view`, and `stop`; ignored for `start`.',
       },
       // Note: the harness value-schema DSL supports only
       // description/title/default/examples plus type/enum/const/items/
@@ -154,6 +156,7 @@ export function createVirtualDisplayTool(ctx, options) {
             },
           },
           windows: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          view: { type: 'object', additionalProperties: true },
           warning: { type: 'string' },
           notes: { type: 'array', items: { type: 'string' } },
         },
@@ -198,6 +201,18 @@ function renderValue(value) {
     return { type: 'text', text: `virtual_display ${value.action} failed: ${value.error ?? 'unknown error'}` }
   }
 
+  if (value.action === 'view') {
+    const view = value.view ?? {}
+    lines.push(`session ${value.sessionId} is on ${view.kind}`)
+    if (view.env !== undefined) {
+      for (const [key, val] of Object.entries(view.env)) lines.push(`  ${key}=${val}`)
+    }
+    if (view.stillCapture !== undefined) lines.push(`still frame: ${view.stillCapture}`)
+    if (view.liveViewer !== undefined) lines.push(`live viewer: ${view.liveViewer}`)
+    if (view.note !== undefined) lines.push(`note: ${view.note}`)
+    return { type: 'text', text: lines.join('\n') }
+  }
+
   if (value.image !== undefined) {
     lines.push(
       `captured ${value.path} (${value.image.width}x${value.image.height}, ${value.image.bytes} bytes)`,
@@ -234,6 +249,8 @@ export class VirtualDisplayManager {
           return await this.start(args, exec)
         case 'capture':
           return await this.capture(args, exec)
+        case 'view':
+          return await this.view(args)
         case 'stop':
           return await this.stop(args)
         default:
@@ -248,6 +265,25 @@ export class VirtualDisplayManager {
   async inspect() {
     const capabilities = await inspectCapabilities(this.ctx)
     return { action: 'inspect', ok: true, capabilities }
+  }
+
+  /**
+   * Report how a human can watch this session live.
+   *
+   * `capture` gives the model a still frame; this gives the *human* a way in.
+   * Nothing is launched — the result is a recipe built from the live socket
+   * paths, so it stays accurate across platforms and never starts a listener
+   * the caller did not ask for.
+   */
+  async view(args) {
+    const { session } = this.require(args.sessionId)
+    return {
+      action: 'view',
+      ok: true,
+      sessionId: args.sessionId,
+      session: session.describe(),
+      view: session.viewHints(),
+    }
   }
 
   async start(args, exec) {
