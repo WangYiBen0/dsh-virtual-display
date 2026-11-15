@@ -522,6 +522,64 @@ export class VirtualDisplayManager {
     return { session }
   }
 
+  // --- panel support -----------------------------------------------------
+  //
+  // The Web panel runs outside the agent's tool call, so it cannot reuse
+  // `run()`. These three methods are the whole surface it needs, and they are
+  // intentionally narrow: list, read one frame, send one event.
+
+  /** Live sessions, described. */
+  listSessions() {
+    const out = []
+    for (const [id, session] of this.sessions) {
+      try {
+        out.push({ sessionId: id, ...session.describe() })
+      } catch {
+        out.push({ sessionId: id })
+      }
+    }
+    return out
+  }
+
+  /** Resolve a session without throwing, for HTTP handlers. */
+  peekSession(sessionId) {
+    return this.sessions.get(sessionId)
+  }
+
+  /**
+   * Capture straight to a buffer, without touching the attachment store.
+   *
+   * The panel polls this, so it must be cheap: no paint-waiting budget beyond a
+   * short floor, and no attachment registration. A session with nothing
+   * rendered legitimately produces a small, flat PNG — that is a valid frame,
+   * not an error, and the panel renders it as-is.
+   */
+  async grabFrame(session) {
+    const destPath = join(session.runtimeDir, `.frame-${Date.now()}.png`)
+    await session.capture({ destPath, waitMs: 1500, settleMs: 0, minPaintMs: 500 })
+    const { readFileSync, rm } = await import('node:fs')
+    try {
+      return readFileSync(destPath)
+    } finally {
+      // The panel polls this endpoint; keeping every frame would fill the disk.
+      rm(destPath, { force: true }, () => undefined)
+    }
+  }
+
+  /** Inject one already-normalised input request from the panel. */
+  async injectInput(session, request) {
+    const injector = new InputInjector(session)
+    return injector.apply(normalizeInput(request))
+  }
+
+  /** Window list, for the panel's window picker. */
+  async listWindows(session) {
+    return session.backend.listWindows(session.ctx, session.display, {
+      tools: session.tools,
+      env: session.renderEnv(),
+    })
+  }
+
   /** Dispose every session; called from the plugin's teardown. */
   async dispose() {
     const ids = [...this.sessions.keys()]

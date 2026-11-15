@@ -14,9 +14,11 @@
 
 import Schema from '@deepseek-ai/schemastery'
 import { createVirtualDisplayTool, VirtualDisplayManager } from './src/tool.js'
+import { registerPanelRoutes } from './src/panel.js'
 
 export const name = 'virtual-display'
 export const inject = ['tools', 'subprocess', 'attachments']
+
 
 /**
  * Config schema; every field is optional and has a working default.
@@ -32,6 +34,9 @@ export const Config = Schema.object({
     .description('Default virtual display width in pixels.'),
   defaultHeight: Schema.natural().min(64).max(4320).default(800)
     .description('Default virtual display height in pixels.'),
+  webPanel: Schema.boolean().default(true).description(
+    'Serve the live-preview panel routes under /virtual-display. Disable to keep the HTTP surface closed.',
+  ),
 })
 
 export function apply(ctx, config = {}) {
@@ -42,6 +47,10 @@ export function apply(ctx, config = {}) {
   })
 
   ctx.tools.register(createVirtualDisplayTool(ctx, { manager }))
+
+  // The panel lives on the harness's own web server, so it shares the origin
+  // the user already trusts and opens no extra port.
+  if (config.webPanel !== false) registerPanelRoutes(ctx, manager)
 
   // Never leave a display, socket, or browser process behind.
   ctx.effect(() => () => manager.dispose())
