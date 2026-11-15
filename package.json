@@ -1,7 +1,6 @@
 {
   "name": "dsh-virtual-display",
-  "version": "0.3.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "Provision an isolated virtual display, drive it with synthetic input, and watch it live from the Web panel.",
   "exports": {
