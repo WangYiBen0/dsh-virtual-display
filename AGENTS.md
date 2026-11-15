@@ -20,6 +20,9 @@ locale/
 src/
   tool.js                 virtual_display tool definition + VirtualDisplayManager
   session.js              VirtualDisplaySession lifecycle; private env; paint-polling capture
+  input.js                synthetic keyboard/pointer injection (X11, Wayland, Windows, macOS)
+  panel.js                HTTP routes for the live Web panel
+  audio.js                per-session null sink and audio routing
   capabilities.js         Host probing (inspect), platform/gear selection, support assertions
   gears.js                Isolation gears: direct / container / vm
   display-number.js       X display allocation (:90–:199) with socket + lock checks
@@ -29,6 +32,7 @@ src/
     wayland.js            Nested private compositor or xwayland fallback to X11
     windows.js            PowerShell + .NET GDI+ CopyFromScreen
     macos.js              screencapture (-l <windowId> when known)
+client.js                 Web panel: composer-dock decoration (live frame + click injection)
 docs/
   ENVIRONMENT-PROBE.md    Verified host probe notes (flags, paths, symptoms)
 .scratch/                 Local experiments/tests (smoke.mjs, manager-test.mjs, logs); not package output
@@ -44,7 +48,7 @@ Two orthogonal axes compose at runtime:
   - `container`: disposable podman/docker container.
   - `vm`: disposable qemu VM with a qcow2 overlay over a base image.
 
-`VirtualDisplayManager` (in `src/tool.js`) owns live sessions and serializes actions (`inspect | start | capture | view | stop`). `VirtualDisplaySession` (in `src/session.js`) acquires a backend display, prepares a gear, launches a renderer, and captures frames. `viewHints()` produces the human-facing attach recipe for `view`; it executes nothing.
+`VirtualDisplayManager` (in `src/tool.js`) owns live sessions and serializes actions (`inspect | start | capture | input | view | stop`). It also serves the Web panel (`src/panel.js`), so its panel methods stay deliberately narrow: list sessions, read one frame, send one event. `VirtualDisplaySession` (in `src/session.js`) acquires a backend display, prepares a gear, launches a renderer, and captures frames. `viewHints()` produces the human-facing attach recipe for `view`; it executes nothing.
 
 ## Safety model (do not break this)
 
@@ -63,6 +67,17 @@ Isolation needs **three** properties; weakening any one breaks the promise:
 
 `.scratch/safety-test.mjs` asserts all of the above, including that a caller-supplied `DISPLAY` cannot smuggle the live session back in. Run it after touching `privateBaseEnv` or `renderEnv`.
 
+**Control-plane calls must NOT use `renderEnv()`.** `renderEnv()` rewrites `XDG_RUNTIME_DIR` to the session directory on purpose. Any tool that talks to a *host* daemon — `pw-cli`, `pw-dump`, `xdpyinfo` probes — must run with the plain host environment (`AudioIsolation.controlEnv()`), or it will look for a socket that is not there and silently do nothing.
+
+## Testing must not disturb the user
+
+The plugin exists so the user is never interrupted. Tests are not exempt, and this was violated once: a probe played a 440 Hz tone through the real speakers to establish a "default output" baseline.
+
+- **Audio tests play digitally silent (all-zero) PCM only.** A routing regression must stay inaudible. Never add an audible tone, and never use the user's default device as a control case.
+- **Never screenshot or interact with the user's live session.** Always go through a session this plugin created.
+- **Kill what you start.** A leaked `Xvfb`, `sway`, or null sink outlives the test and confuses the next run; `pkill -f <pattern>` can match your own shell, so kill by exact name or pid.
+- Prefer asserting on the *effect* (a page title changed, a PipeWire link exists, a pixel colour) over an exit code. `pw-cli` exits 0 while creating nothing.
+
 ## Important implementation notes
 
 - **Plugin config**: `Config` in `index.js` must be a `@deepseek-ai/schemastery` (standard-schema) instance, not a bare JSON Schema literal — the loader validates via `Config['~standard'].validate(...)`.
@@ -75,27 +90,26 @@ Isolation needs **three** properties; weakening any one breaks the promise:
 - **Wayland compositor order**: `sway` → `mutter` → `gamescope` → `kwin_wayland`. sway must come first because it is the only one here that both runs GPU-less *and* implements `wlr-screencopy` for grim. mutter starts headless but cannot be captured by grim.
 - **Wayland socket naming**: wlroots compositors ignore `WAYLAND_DISPLAY` and always publish `wayland-1`, so the backend adopts whatever `wayland-*` socket appears in the private runtime dir instead of demanding a specific name.
 - **`view` action**: reports attach commands only; it must never start a listener or spawn a viewer.
+- **`input` action**: normalise through `normalizeInput()` and dispatch via `InputInjector`; never build injection argv by hand in the tool layer. Focus is handled *inside* the injector because a missing focus is silent — keys simply go nowhere.
+- **`wtype` needs `-s`**: it advertises its keymap asynchronously and drops the first character of every invocation without it. This is correctness, not timing tuning.
+- **Panel routes**: registered through `ctx.inject(['webServer'], ...)` + `ctx.effect` in `src/panel.js`, under `/virtual-display`. Session lookup is by opaque id via `manager.peekSession`; request bodies are capped. Do not add a route that accepts an arbitrary argv.
+- **Audio isolation**: `AudioIsolation` owns one null sink per session. Claiming isolation requires the sink to be **observed** in `pw-dump`; `pw-cli`'s exit code is not evidence.
 
 ## Development & testing
 
 ```sh
-# X11 E2E: Xvfb -> chromium -> real pixels
-node .scratch/smoke.mjs
-
-# Wayland E2E: headless compositor -> grim -> real pixels
-node .scratch/wayland-test.mjs
-
-# `view` recipes point at the private session, never the user's
-node .scratch/view-test.mjs
-
-# Manager E2E: inspect/start/capture/stop/dispose
-node .scratch/manager-test.mjs
-
-# Env scrubbing: no live display can be reached (no dependencies needed)
-node .scratch/safety-test.mjs
+node .scratch/smoke.mjs              # X11 E2E: Xvfb -> chromium -> real pixels
+node .scratch/wayland-test.mjs       # Wayland E2E: headless compositor -> grim -> real pixels
+node .scratch/input-test.mjs         # X11 E2E: type + click reach a real page
+node .scratch/wayland-input-test.mjs # Wayland E2E: wtype reaches a real page
+node .scratch/panel-test.mjs         # panel routes over a real HTTP listener
+node .scratch/audio-test.mjs         # audio lands in the session sink, not the speakers
+node .scratch/view-test.mjs          # `view` recipes point at the private session
+node .scratch/manager-test.mjs       # manager E2E: inspect/start/capture/stop/dispose
+node .scratch/safety-test.mjs        # env scrubbing (no dependencies needed)
 ```
 
-Tests live under `.scratch/` in this checkout; they assert on real captured pixels/behavior, not just exit codes. `safety-test.mjs` is the cheapest guard for the isolation promise — run it after any change to `privateBaseEnv`/`renderEnv`. The X11 and Wayland E2E tests need the corresponding tools installed on the host.
+Tests live under `.scratch/` in this checkout; they assert on real captured pixels, real HTTP responses, real PipeWire links, or real environment properties — not just exit codes. `safety-test.mjs` is the cheapest guard for the isolation promise; run it after any change to `privateBaseEnv`/`renderEnv`. The X11 and Wayland E2E tests need the corresponding tools installed on the host.
 
 ## Editing guidelines
 

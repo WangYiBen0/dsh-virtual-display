@@ -3,7 +3,15 @@
 [![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that gives the agent a
-**private display** to render and screenshot on, so it never has to grab your desktop.
+**private display** to render, drive, and screenshot on, so it never has to grab your desktop.
+
+Three capabilities, each usable on its own:
+
+- **A private display** — boot it, render into it, capture real pixels.
+- **Synthetic input** — type, click, and scroll into what was rendered, so an agent can operate a
+  GUI instead of only photographing it.
+- **A live panel** — watch the display from the composer, and click into it yourself.
+- **Silent audio** — each session's sound goes to its own sink, never to your speakers.
 
 ## Why
 
@@ -21,14 +29,65 @@ renders into it, and returns the frame as an image attachment. Your session is n
 | `inspect` | Report which platforms and gears actually work **on this host**, before committing to one |
 | `start` | Boot a display, optionally launching a page or program. Returns a session id |
 | `capture` | Render an image from a session, returned as a viewable attachment |
+| `input` | Inject text, key chords, clicks, moves, and scrolls into a session |
 | `view` | Report the exact commands a human can run to watch this session live |
 | `stop` | Tear a session down |
 
 Plus `platform` (`x11` / `wayland` / `windows` / `macos`), `gear` (`direct` / `container` / `vm`),
-`width`, `height`, `target`, `args`, `argv`, `waitMs`, `settleMs`, `capturePath`, and `keep`.
+`width`, `height`, `target`, `args`, `argv`, `input`, `captureAfter`, `waitMs`, `settleMs`,
+`capturePath`, and `keep`.
 
 Reuse a `sessionId` across several `capture` calls when iterating on one window; each `start`
 allocates a fresh display.
+
+### Driving the display
+
+`input` accepts one event at a time:
+
+```jsonc
+{ "kind": "text",   "text": "hello" }          // type
+{ "kind": "key",    "key": "ctrl+c" }          // a key or chord
+{ "kind": "click",  "x": 131, "y": 180 }       // left/middle/right
+{ "kind": "scroll", "direction": "down", "amount": 3 }
+```
+
+Coordinates are **display pixels**, the same space a `capture` image uses — read a position off a
+frame and click it, no rescaling. `captureAfter: true` returns a fresh frame in the same call.
+
+Underneath: `xdotool` (XTEST) on X11, `wtype` + `wlrctl` on Wayland, PowerShell on Windows,
+`osascript` on macOS. Two quirks are handled because they silently break injection otherwise:
+
+- Without a window manager nothing holds focus, so keys go to the root window and vanish. The
+  injector focuses the top window (X11) or asks sway to focus its child (Wayland) first.
+- `wtype` installs its virtual-keyboard keymap asynchronously but starts typing immediately, so
+  **every** invocation loses its first character unless given `-s`. That delay is required for
+  correctness, not tuning.
+
+Pointer injection on a headless wlroots compositor is a known limitation: the seat reports
+`capabilities: 0` and exposes no pointer device, so clicks do not register there. Keyboard works,
+because `wtype` creates its own virtual keyboard.
+
+### The live panel
+
+A composer-dock decoration polls one PNG from `/virtual-display/frame` and posts clicks back to
+`/virtual-display/input`. Clicking the frame sends a click at that point, rescaled by
+`naturalWidth/clientWidth` so it lands where you clicked even when the frame is displayed smaller
+than the display it came from.
+
+The routes live on the harness's own web server, so the panel shares the origin the page already
+trusts and no extra port is opened. Set `webPanel: false` to not register them at all.
+
+### Silent audio
+
+Each session creates a PipeWire null sink (`dsh-vd-<id>`) and routes its renderer into it, so audio
+is mixed into a device nobody hears. `audio: inherit` restores audible playback; on a host without
+PipeWire the session reports `mode: unavailable` rather than failing to start.
+
+Measured here, not assumed: `PIPEWIRE_NODE` is what actually routes a stream; `PULSE_SINK` was
+ignored by `pw-play`, which linked straight to the real speakers. Both are set, but only the former
+carries the behaviour. The plugin also **verifies the sink exists** before claiming isolation —
+`pw-cli` exits 0 while creating nothing, and an earlier build duly reported isolated audio that was
+still audible.
 
 ## Isolation gears
 
@@ -113,16 +172,28 @@ src/backends/             x11, wayland, windows, macos
 ## Tests
 
 ```sh
-node .scratch/smoke.mjs          # X11 E2E: Xvfb -> chromium -> real pixels
-node .scratch/wayland-test.mjs   # Wayland E2E: headless compositor -> grim -> real pixels
-node .scratch/view-test.mjs      # `view` recipes point at the private session, not yours
-node .scratch/manager-test.mjs   # manager E2E: inspect/start/capture/stop/dispose
-node .scratch/safety-test.mjs    # env scrubbing: no live display can be reached
+node .scratch/smoke.mjs             # X11 E2E: Xvfb -> chromium -> real pixels
+node .scratch/wayland-test.mjs      # Wayland E2E: headless compositor -> grim -> real pixels
+node .scratch/input-test.mjs        # X11 E2E: type + click reach a real page
+node .scratch/wayland-input-test.mjs # Wayland E2E: wtype reaches a real page
+node .scratch/panel-test.mjs        # panel routes over a real HTTP listener
+node .scratch/audio-test.mjs        # audio lands in the session sink, not the speakers
+node .scratch/view-test.mjs         # `view` recipes point at the private session, not yours
+node .scratch/manager-test.mjs      # manager E2E: inspect/start/capture/stop/dispose
+node .scratch/safety-test.mjs       # env scrubbing: no live display can be reached
 ```
 
-Each asserts on real captured pixels or real environment properties, not just exit codes.
-`safety-test.mjs` needs nothing installed and is the cheapest regression guard for the plugin's
-core promise.
+Each asserts on real captured pixels, real HTTP responses, real PipeWire links, or real environment
+properties — never merely on an exit code. That distinction is not pedantry: `pw-cli` exits 0 while
+creating nothing, so an exit-code test would have reported working audio isolation that did not
+exist.
+
+`safety-test.mjs` needs nothing installed and is the cheapest regression guard for the plugin's core
+promise.
+
+**Audio tests must never make noise.** They play only digitally silent (all-zero) PCM, so a routing
+regression stays inaudible instead of beeping at whoever is sitting at the machine. Do not add an
+audible tone to a test.
 
 ## License
 
