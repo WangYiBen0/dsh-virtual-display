@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { VirtualDisplaySession } from './session.js'
 import { InputInjector, normalizeInput } from './input.js'
+import { lossless } from './lossless.js'
 import { inspectCapabilities, choosePlatform, assertSupported, PLATFORMS, GEARS } from './capabilities.js'
 
 const ACTIONS = ['inspect', 'start', 'capture', 'input', 'view', 'stop']
@@ -273,26 +274,37 @@ export class VirtualDisplayManager {
   }
 
   async run(args, exec) {
+    // Every result is normalized before it leaves. The harness snapshots tool
+    // output as lossless JSON and rejects the entire call when an object owns a
+    // property whose value is `undefined` — which is exactly what building an
+    // object with an unfilled optional field produces. Centralizing it here
+    // means no action has to remember.
     try {
-      switch (args.action) {
-        case 'inspect':
-          return await this.inspect()
-        case 'start':
-          return await this.start(args, exec)
-        case 'capture':
-          return await this.capture(args, exec)
-        case 'input':
-          return await this.input(args, exec)
-        case 'view':
-          return await this.view(args)
-        case 'stop':
-          return await this.stop(args)
-        default:
-          throw new Error(`unknown action "${args.action}"`)
-      }
+      const result = await this.dispatch(args, exec)
+      return lossless(result)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      return { action: args.action, ok: false, error: message }
+      return lossless({ action: args.action, ok: false, error: message })
+    }
+  }
+
+  /** Route one action; see `run` for the lossless-JSON normalization. */
+  async dispatch(args, exec) {
+    switch (args.action) {
+      case 'inspect':
+        return await this.inspect()
+      case 'start':
+        return await this.start(args, exec)
+      case 'capture':
+        return await this.capture(args, exec)
+      case 'input':
+        return await this.input(args, exec)
+      case 'view':
+        return await this.view(args)
+      case 'stop':
+        return await this.stop(args)
+      default:
+        throw new Error(`unknown action "${args.action}"`)
     }
   }
 

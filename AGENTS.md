@@ -26,6 +26,7 @@ src/
   capabilities.js         Host probing (inspect), platform/gear selection, support assertions
   gears.js                Isolation gears: direct / container / vm
   display-number.js       X display allocation (:90–:199) with socket + lock checks
+  lossless.js             lossless(value)/isLossless(value): the tool-result JSON boundary
   exec.js                 Command resolution (harness -> PATH -> profile -> nix name match), run/collect/spawn helpers
   backends/
     x11.js                Xvfb backend (private X server)
@@ -88,6 +89,7 @@ The plugin exists so the user is never interrupted. Tests are not exempt, and th
 - **Paint detection**: `session.capture()` polls for pixel variety (distinct colors > 1), not just window existence — Chromium can map windows before painting.
 - **Capture result**: `VirtualDisplayManager.capture()` saves the PNG via the attachment store (`ctx.attachments.saveImage`) when available so it renders inline; it still works without an attachment store (file on disk).
 - **Numeric bounds in tool schema**: harness value-schema DSL lacks `minimum/maximum`; bounds are documented in descriptions and enforced by `clampNumber()` in `src/tool.js`.
+- **Tool results must be lossless JSON**: the harness validates every tool result with `snapshotJsonValue` and rejects the *entire call* (`ToolOutputError: INVALID_TOOL_OUTPUT — value is not lossless JSON`) if any own property is `undefined`, `NaN`, `Infinity`, `-0`, a sparse array, a `Date`/`Map`/`Set`/class instance, or a function. This is stricter than `JSON.stringify`, which silently drops `undefined` keys — so an object with one unfilled optional field fails everything while looking perfectly fine in a log line. Never return a raw internal object from a tool action: `VirtualDisplayManager.run()` wraps every path (success *and* error) in `lossless()`. Add normalization at the boundary where the value is produced, and keep `isLossless()` as a local mirror of the rule. `.scratch/lossless-test.mjs` asserts against the harness's real validator, not the mirror.
 - **Command resolution**: `src/exec.js` resolves executables via harness `subprocess.resolveExecutable`, `PATH` scan, profile bin dirs, then a Nix-store lookup matched by **package name** (`PROVIDERS`), never by store hash. Add new tools to `PROVIDERS` and `BIN_NAMES` rather than hardcoding absolute paths — store hashes are garbage-collected and all previously hardcoded ones were already dead.
 - **Wayland compositor order**: `sway` → `mutter` → `gamescope` → `kwin_wayland`. sway must come first because it is the only one here that both runs GPU-less *and* implements `wlr-screencopy` for grim. mutter starts headless but cannot be captured by grim.
 - **Wayland socket naming**: wlroots compositors ignore `WAYLAND_DISPLAY` and always publish `wayland-1`, so the backend adopts whatever `wayland-*` socket appears in the private runtime dir instead of demanding a specific name.
@@ -116,6 +118,7 @@ node .scratch/audio-test.mjs         # audio lands in the session sink, not the 
 node .scratch/view-test.mjs          # `view` recipes point at the private session
 node .scratch/manager-test.mjs       # manager E2E: inspect/start/capture/stop/dispose
 node .scratch/safety-test.mjs        # env scrubbing (no dependencies needed)
+node .scratch/lossless-test.mjs      # tool results pass the harness's lossless-JSON validator
 ```
 
 Tests live under `.scratch/` in this checkout; they assert on real captured pixels, real HTTP responses, real PipeWire links, or real environment properties — not just exit codes. `safety-test.mjs` is the cheapest guard for the isolation promise; run it after any change to `privateBaseEnv`/`renderEnv`. The X11 and Wayland E2E tests need the corresponding tools installed on the host.
