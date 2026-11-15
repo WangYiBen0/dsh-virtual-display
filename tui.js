@@ -340,7 +340,7 @@ export function applyTui(ctx, options = {}) {
     // A slash command is the natural way to open a whole-screen view. The
     // handler signature and the result union are dsh-commands': `{ kind:
     // 'success', text }` with `text` empty, so the conversation is not disturbed.
-    tui.inject(['commands'], (scope) => {
+    tui.inject(['commands', 'tuiScenes'], (scope) => {
       scope.effect(
         () =>
           scope.commands.register({
@@ -355,6 +355,7 @@ export function applyTui(ctx, options = {}) {
                   text: 'No web carrier is listening, so the panel routes are unreachable. Enable webPanel and a webserver in this profile.',
                 }
               }
+              // `scope` declares tuiScenes too, so this read is legal.
               const opened = scope.tuiScenes.open('virtual-display')
               if (opened !== true) {
                 return { kind: 'error', text: 'The virtual-display scene is not registered.' }
