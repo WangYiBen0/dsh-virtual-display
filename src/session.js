@@ -11,6 +11,7 @@ import { WaylandBackend } from './backends/wayland.js'
 import { WindowsBackend } from './backends/windows.js'
 import { MacBackend } from './backends/macos.js'
 import { createGear } from './gears.js'
+import { AudioIsolation } from './audio.js'
 import { inspectCapabilities } from './capabilities.js'
 import { resolveAll, run } from './exec.js'
 
@@ -37,6 +38,8 @@ const TOOL_NAMES = [
   'xdotool',
   'wtype',
   'wlrctl',
+  'pwCli',
+  'pwDump',
   'mutter',
   'sway',
   'swaymsg',
@@ -190,6 +193,11 @@ export class VirtualDisplaySession {
       vncPort: options.vncPort,
     })
 
+    // Audio isolation comes last: it needs the session id for its sink name,
+    // and it must never prevent a display from starting.
+    this.audio = new AudioIsolation(this, { mode: options.audio })
+    await this.audio.create()
+
     this.state = 'ready'
     return this
   }
@@ -202,6 +210,8 @@ export class VirtualDisplaySession {
         pin: this.pinsToX11() ? 'x11' : undefined,
       }),
       ...this.display.displayEnv,
+      // Route this renderer's sound into its own silent sink.
+      ...(this.audio?.env() ?? {}),
     }
   }
 
@@ -356,6 +366,7 @@ export class VirtualDisplaySession {
       height: this.options.height,
       displayEnv: this.display?.displayEnv ?? {},
       sockets: this.display?.sockets ?? [],
+      audio: this.audio?.describe(),
       warning: this.windowWarning ?? this.display?.waylandNote,
     }
   }
@@ -405,6 +416,11 @@ export class VirtualDisplaySession {
     try {
       this.launched?.terminate()
       await this.launched?.waitForExit().catch(() => undefined)
+    } catch {
+      // ignore
+    }
+    try {
+      await this.audio?.destroy()
     } catch {
       // ignore
     }

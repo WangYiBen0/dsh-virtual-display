@@ -37,6 +37,9 @@ export const Config = Schema.object({
   webPanel: Schema.boolean().default(true).description(
     'Serve the live-preview panel routes under /virtual-display. Disable to keep the HTTP surface closed.',
   ),
+  audio: Schema.union(['null-sink', 'inherit']).default('null-sink').description(
+    'Audio isolation for renderers. `null-sink` routes each session into its own silent sink; `inherit` plays through the default device.',
+  ),
 })
 
 export function apply(ctx, config = {}) {
@@ -44,6 +47,7 @@ export function apply(ctx, config = {}) {
     runtimeRoot: config.runtimeRoot,
     defaultWidth: config.defaultWidth,
     defaultHeight: config.defaultHeight,
+    audio: config.audio,
   })
 
   ctx.tools.register(createVirtualDisplayTool(ctx, { manager }))

@@ -42,6 +42,8 @@ export const PROVIDERS = {
   xdotool: ['xdotool'],
   wtype: ['wtype'],
   wlrctl: ['wlrctl'],
+  pwCli: ['pipewire'],
+  pwDump: ['pipewire'],
   podman: ['podman'],
   docker: ['docker'],
   'qemu-system-x86_64': ['qemu'],
@@ -83,6 +85,8 @@ function profileBinDirs() {
  */
 export const BIN_NAMES = {
   waylandInfo: 'wayland-info',
+  pwCli: 'pw-cli',
+  pwDump: 'pw-dump',
 }
 
 function escapeRegExp(text) {

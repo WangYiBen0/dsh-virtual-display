@@ -344,6 +344,8 @@ export class VirtualDisplayManager {
       baseImage: args.baseImage,
       acceleration: capabilities.gears.vm?.acceleration,
       keepRuntimeDir: true,
+      audio: this.options.audio,
+      sessionId,
     })
 
     this.sessions.set(sessionId, session)
