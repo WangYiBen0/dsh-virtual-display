@@ -27,6 +27,84 @@ import { run } from './exec.js'
 export const SINK_PREFIX = 'dsh-vd-'
 
 /**
+ * Node property recording which DSH process created a sink.
+ *
+ * `object.linger = true` is required — otherwise the sink would die the moment
+ * `pw-cli` exits — but it also means the sink outlives us if the plugin process
+ * is killed outright (`SIGKILL`, a crashed host, a `timeout` in a test). Those
+ * orphans accumulate in the user's sound settings under the name "DSH virtual
+ * display", which is exactly the kind of residue this plugin promises not to
+ * leave behind. The owner pid is what makes them distinguishable from a sink
+ * belonging to another, still-running DSH process.
+ */
+export const OWNER_PROP = 'dsh.vd.pid'
+
+/** Is this pid still running? `EPERM` means alive but not ours. */
+function isAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  if (pid === process.pid) return true
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code === 'EPERM'
+  }
+}
+
+/** True once this process has looked for orphans, so it happens at most once. */
+let reapAttempted = false
+
+/**
+ * Destroy `dsh-vd-*` sinks whose owning process no longer exists.
+ *
+ * Runs lazily, immediately before the first sink this process creates, so a
+ * host without PipeWire never pays for it and our own new sink cannot exist
+ * yet. Sinks are matched by name prefix, then kept only when their owner pid is
+ * dead — a concurrent DSH process must be left alone.
+ *
+ * A sink with no owner marker predates this property. It is reaped too: this
+ * plugin is the only writer of the `dsh-vd-` namespace, so an unowned one can
+ * only be a leftover from an older build.
+ */
+export async function reapOrphanSinks(session) {
+  const dump = session.tools?.pwDump
+  const pwCli = session.tools?.pwCli
+  if (dump === undefined || pwCli === undefined) return []
+
+  let parsed
+  try {
+    const result = await run(session.ctx, [dump], {
+      env: { ...process.env },
+      maxBytes: 1 << 24,
+      graceMs: 8000,
+    })
+    parsed = JSON.parse(result.stdout)
+  } catch {
+    return []
+  }
+
+  const reaped = []
+  for (const node of parsed ?? []) {
+    const props = node?.info?.props
+    const name = props?.['node.name']
+    if (typeof name !== 'string' || !name.startsWith(SINK_PREFIX)) continue
+    const owner = props?.[OWNER_PROP]
+    if (owner !== undefined && isAlive(Number(owner))) continue
+    try {
+      await run(session.ctx, [pwCli, 'destroy', String(node.id)], {
+        env: { ...process.env },
+        maxBytes: 1 << 16,
+        graceMs: 5000,
+      })
+      reaped.push(name)
+    } catch {
+      // Best effort: a sink we cannot remove is not worth failing a session.
+    }
+  }
+  return reaped
+}
+
+/**
  * A session's audio sink.
  *
  * Lifecycle is explicit: `create()` then `destroy()`, and `destroy()` is
