@@ -33,6 +33,7 @@ src/
     windows.js            PowerShell + .NET GDI+ CopyFromScreen
     macos.js              screencapture (-l <windowId> when known)
 client.js                 Web panel: right-Sidebar tab type (live frame + click injection)
+tui.js                    Terminal surface: fullscreen scene + /display command
 docs/
   ENVIRONMENT-PROBE.md    Verified host probe notes (flags, paths, symptoms)
 .scratch/                 Local experiments/tests (smoke.mjs, manager-test.mjs, logs); not package output
@@ -77,6 +78,7 @@ The plugin exists so the user is never interrupted. Tests are not exempt, and th
 - **Never screenshot or interact with the user's live session.** Always go through a session this plugin created.
 - **Kill what you start.** A leaked `Xvfb`, `sway`, or null sink outlives the test and confuses the next run; `pkill -f <pattern>` can match your own shell, so kill by exact name or pid.
 - Prefer asserting on the *effect* (a page title changed, a PipeWire link exists, a pixel colour) over an exit code. `pw-cli` exits 0 while creating nothing.
+- **Assert only on what the plugin controls.** The host has its own audio playback and windows running; a test that counts "any stream on the speakers" fails for reasons the plugin did not cause. Filter to the process the test started (`pw-play`, its own session id) before judging.
 
 ## Important implementation notes
 
@@ -95,6 +97,7 @@ The plugin exists so the user is never interrupted. Tests are not exempt, and th
 - **Panel locale**: every visible string lives in the inline `zh`/`en` dictionaries in `client.js`; `zh` is the key-set source of truth and `en` must stay key-identical. Register with `ctx.locale.register(NS, { zh, en })`, bind for tab titles, and pass `locale: NS` to each `ctx.slots.register` so the framework injects `t`. Placeholders are `{name}`. Never hardcode user-visible prose in the component — `.scratch/i18n-test.mjs` enforces it.
 - **Panel UI home**: the panel is a **right-Sidebar tab** (`sidebarRightTabs.register` + the `sidebar.right.pane.tab` / `.title` keyed seats), not a composer decoration. A live frame is viewport, not input furniture — it must not be squeezed under the composer or disappear with it. Session selection arrives through the tab's navigation params (`{ virtualDisplay: { sessionId } }`).
 - **Panel routes**: registered through `ctx.inject(['webServer'], ...)` + `ctx.effect` in `src/panel.js`, under `/virtual-display`. Session lookup is by opaque id via `manager.peekSession`; request bodies are capped. Do not add a route that accepts an arbitrary argv.
+- **TUI surface**: a dsh-tui *scene* (`ctx.tuiScenes.register`), not a slot — the terminal has no slot system. Registered from `applyTui`, which returns immediately when `tuiScenes` is absent, so a Web-only profile is unaffected. The scene reaches the plugin over the same `/virtual-display/*` HTTP routes as the panel; its origin is read from `ctx.webServer.getOrigin()` at open time because dsh-tui binds the carrier with `port: 0` (OS-assigned), so no port may be assumed. Frames are drawn with `ui.Image`, which wants decoded RGBA — decode with the host's `sharp`, and fall back to a text summary when the terminal has no Kitty/Sixel support.
 - **Audio isolation**: `AudioIsolation` owns one null sink per session. Claiming isolation requires the sink to be **observed** in `pw-dump`; `pw-cli`'s exit code is not evidence.
 
 ## Development & testing
@@ -106,6 +109,7 @@ node .scratch/input-test.mjs         # X11 E2E: type + click reach a real page
 node .scratch/wayland-input-test.mjs # Wayland E2E: wtype reaches a real page
 node .scratch/panel-test.mjs         # panel routes over a real HTTP listener
 node .scratch/i18n-test.mjs          # panel dictionaries: parity, placeholders, no hardcoded prose
+node .scratch/tui-test.mjs           # TUI scene/command registration and origin resolution
 node .scratch/audio-test.mjs         # audio lands in the session sink, not the speakers
 node .scratch/view-test.mjs          # `view` recipes point at the private session
 node .scratch/manager-test.mjs       # manager E2E: inspect/start/capture/stop/dispose

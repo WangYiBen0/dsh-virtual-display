@@ -60,6 +60,24 @@ headless wlroots 合成器上的指针注入是已知限制：seat 报 `capabili
 
 这些路由挂在 Harness 自己的 Web 服务器上，面板与页面同源，不额外开端口。设 `webPanel: false` 可完全不注册它们。
 
+### 终端场景
+
+在运行 [dsh-tui](https://github.com/ccch1mneyyy/dsh-TUI) 的 profile 里，同一块面板也以**全屏终端场景**形式提供（`/display`）。终端支持 Kitty 或 Sixel 时会内联绘制画面，不支持时则报告帧大小并说明原因。
+
+| 按键 | 效果 |
+|---|---|
+| 任意文本 | 输入到显示器 |
+| `Enter` | 回车 |
+| `j` / `k` | 下 / 上 |
+| 滚轮 | 滚动 |
+| `p` | 暂停轮询 |
+| `r` | 立即刷新 |
+| `Esc` | 关闭场景 |
+
+终端无法报告像素坐标，所以**在终端里不能点击**——用侧栏 Tab，或给 `input` 传明确坐标。
+
+场景与 Web 面板走同一组 `/virtual-display/*` 路由。origin 在打开时从 `ctx.webServer.getOrigin()` 读取，因为 dsh-tui 的 carrier 用 `port: 0`（系统分配端口）——写死端口从构造上就是错的。没有在监听的 carrier 时，命令会明确报错，而不是打开一个空场景。
+
 ### 静音音频
 
 每个会话创建一个 PipeWire null sink（`dsh-vd-<id>`），并把渲染器路由进去，声音混进一个没人听的设备。`audio: inherit` 恢复外放；主机没有 PipeWire 时会话报告 `mode: unavailable`，而不是启动失败。
@@ -136,6 +154,7 @@ node .scratch/input-test.mjs         # X11 E2E：打字与点击真的到达页�
 node .scratch/wayland-input-test.mjs # Wayland E2E：wtype 真的到达页面
 node .scratch/panel-test.mjs         # 面板路由跑在真实 HTTP 监听上
 node .scratch/i18n-test.mjs          # 面板词典：键对齐、占位符、无硬编码文案
+node .scratch/tui-test.mjs           # TUI 场景/命令注册与 origin 解析
 node .scratch/audio-test.mjs         # 音频进入会话 sink，而不是扬声器
 node .scratch/view-test.mjs          # view 配方只指向私有会话
 node .scratch/manager-test.mjs       # 管理器 E2E：inspect/start/capture/stop/dispose

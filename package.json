@@ -1,6 +1,6 @@
 {
   "name": "dsh-virtual-display",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Provision an isolated virtual display, drive it with synthetic input, and watch it live from the Web panel.",
@@ -13,6 +13,7 @@
   "files": [
     "index.js",
     "client.js",
+    "tui.js",
     "src/**/*.js",
     "cordis.patch.yml",
     "locale/*.json",

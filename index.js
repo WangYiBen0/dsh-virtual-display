@@ -21,6 +21,7 @@
 import Schema from '@deepseek-ai/schemastery'
 import { createVirtualDisplayTool, VirtualDisplayManager } from './src/tool.js'
 import { registerPanelRoutes } from './src/panel.js'
+import { applyTui } from './tui.js'
 
 export const name = 'virtual-display'
 export const inject = ['tools', 'subprocess', 'attachments']
@@ -43,6 +44,9 @@ export const Config = Schema.object({
   webPanel: Schema.boolean().default(true).description(
     'Serve the live-preview routes under /virtual-display, used by the right-Sidebar "Virtual display" tab. Disable to keep the HTTP surface closed.',
   ),
+  tuiScene: Schema.boolean().default(true).description(
+    'Register the fullscreen terminal scene and its /display command when this profile runs dsh-tui. Ignored in profiles without it.',
+  ),
   audio: Schema.union(['null-sink', 'inherit']).default('null-sink').description(
     'Audio isolation for renderers. `null-sink` routes each session into its own silent sink; `inherit` plays through the default device.',
   ),
@@ -61,6 +65,10 @@ export function apply(ctx, config = {}) {
   // The panel lives on the harness's own web server, so it shares the origin
   // the user already trusts and opens no extra port.
   if (config.webPanel !== false) registerPanelRoutes(ctx, manager)
+
+  // Register the TUI scene when this profile has dsh-tui. A Web-only profile
+  // has no `tuiScenes`, and `applyTui` returns without touching anything.
+  if (config.tuiScene !== false) applyTui(ctx)
 
   // Never leave a display, socket, or browser process behind.
   ctx.effect(() => () => manager.dispose())

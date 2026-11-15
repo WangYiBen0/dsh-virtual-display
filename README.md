@@ -84,6 +84,31 @@ than the display it came from.
 The routes live on the harness's own web server, so the panel shares the origin the page already
 trusts and no extra port is opened. Set `webPanel: false` to not register them at all.
 
+### The terminal scene
+
+In a profile running [dsh-tui](https://github.com/ccch1mneyyy/dsh-TUI), the same
+panel is available as a **fullscreen terminal scene** (`/display`). It renders the
+frame inline when the terminal speaks Kitty or Sixel, and reports the frame size
+with a note when it does not.
+
+| Key | Effect |
+|---|---|
+| any text | typed into the display |
+| `Enter` | Return |
+| `j` / `k` | Down / Up |
+| wheel | scroll |
+| `p` | pause polling |
+| `r` | refresh now |
+| `Esc` | close the scene |
+
+The terminal cannot report pixel positions, so **clicks are not available there** — use the Sidebar
+tab, or the `input` action with explicit coordinates.
+
+The scene reaches the plugin over the same `/virtual-display/*` routes as the Web panel. Its origin
+comes from `ctx.webServer.getOrigin()` at open time, because dsh-tui binds the carrier with
+`port: 0` (OS-assigned) — a hardcoded port would be wrong by construction. Without a listening
+carrier the command refuses and says why instead of opening a dead scene.
+
 ### Silent audio
 
 Each session creates a PipeWire null sink (`dsh-vd-<id>`) and routes its renderer into it, so audio
@@ -185,6 +210,7 @@ node .scratch/input-test.mjs        # X11 E2E: type + click reach a real page
 node .scratch/wayland-input-test.mjs # Wayland E2E: wtype reaches a real page
 node .scratch/panel-test.mjs        # panel routes over a real HTTP listener
 node .scratch/i18n-test.mjs         # panel dictionaries: parity, placeholders, no hardcoded prose
+node .scratch/tui-test.mjs          # TUI scene/command registration and origin resolution
 node .scratch/audio-test.mjs        # audio lands in the session sink, not the speakers
 node .scratch/view-test.mjs         # `view` recipes point at the private session, not yours
 node .scratch/manager-test.mjs      # manager E2E: inspect/start/capture/stop/dispose
