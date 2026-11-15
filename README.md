@@ -211,6 +211,7 @@ node .scratch/wayland-input-test.mjs # Wayland E2E: wtype reaches a real page
 node .scratch/panel-test.mjs        # panel routes over a real HTTP listener
 node .scratch/i18n-test.mjs         # panel dictionaries: parity, placeholders, no hardcoded prose
 node .scratch/tui-test.mjs          # TUI scene/command registration and origin resolution
+node .scratch/inject-guard-test.mjs # no module reads a service outside ctx.inject
 node .scratch/audio-test.mjs        # audio lands in the session sink, not the speakers
 node .scratch/view-test.mjs         # `view` recipes point at the private session, not yours
 node .scratch/manager-test.mjs      # manager E2E: inspect/start/capture/stop/dispose

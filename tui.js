@@ -296,70 +296,74 @@ function VirtualDisplayScene(props) {
 /**
  * Register the scene and a command that opens it.
  *
- * `apply` runs only in a profile that has dsh-tui, so nothing here can affect a
- * Web-only installation.
+ * Everything runs inside `ctx.inject(['tuiScenes'], ...)`, which is the only
+ * legal way to reach that service: cordis throws
+ * `cannot get property "tuiScenes" without inject` on a bare property read, and
+ * an injected callback simply never runs in a profile without dsh-tui. That is
+ * also why a Web-only installation is unaffected — not because of a runtime
+ * check on our side.
+ *
+ * `webServer` is injected the same way but is genuinely optional: a TUI profile
+ * without an HTTP carrier still gets the command, which then explains why it
+ * cannot open.
  */
 export function applyTui(ctx, options = {}) {
-  if (ctx.tuiScenes === undefined) return
-
-  /**
-   * Resolve the HTTP origin of this process's web carrier.
-   *
-   * Read lazily at scene-open time: the carrier binds during initialization, so
-   * `getOrigin()` throws before that. An explicit option wins, which is what a
-   * test or an unusual composition needs.
-   */
-  const resolveOrigin = () => {
-    if (typeof options.origin === 'string') return options.origin
-    const port = ctx.webServer?.port
-    if (typeof port !== 'number') return undefined
-    try {
-      return ctx.webServer.getOrigin()
-    } catch {
-      return undefined
+  ctx.inject(['tuiScenes'], (tui) => {
+    /**
+     * Resolve the HTTP origin of this process's web carrier.
+     *
+     * Read lazily, at scene-open time: the carrier binds during initialization,
+     * so `getOrigin()` throws before that. An explicit option wins, which is
+     * what a test or an unusual composition needs.
+     */
+    const resolveOrigin = () => {
+      if (typeof options.origin === 'string') return options.origin
+      const server = tui.reflect.get('webServer', false)
+      if (typeof server?.port !== 'number') return undefined
+      try {
+        return server.getOrigin()
+      } catch {
+        return undefined
+      }
     }
-  }
 
-  ctx.effect(
-    () =>
-      ctx.tuiScenes.register({
-        id: 'virtual-display',
-        title: 'Virtual display',
-        component: (sceneProps) => VirtualDisplayScene({ ...sceneProps, origin: resolveOrigin() }),
-      }),
-    'virtual-display: tui scene',
-  )
-
-  // A slash command is the natural way to open a whole-screen view. The
-  // handler signature and the result union are dsh-commands': `{ kind:
-  // 'success', text }` with `text` empty, so the conversation is not disturbed.
-  // `webServer` is optional: a profile may run the TUI without any HTTP carrier,
-  // in which case the command reports that rather than opening a dead scene.
-  ctx.inject(['webServer'], () => {})
-
-  ctx.inject(['commands'], (scope) => {
-    scope.effect(
+    tui.effect(
       () =>
-        scope.commands.register({
-          name: 'display',
-          description: 'Open the private virtual display (live preview + input)',
-          recordInput: false,
-          handler: async () => {
-            const origin = resolveOrigin()
-            if (origin === undefined) {
-              return {
-                kind: 'error',
-                text: 'No web carrier is listening, so the panel routes are unreachable. Enable webPanel and a webserver in this profile.',
-              }
-            }
-            const opened = ctx.tuiScenes.open('virtual-display')
-            if (opened !== true) {
-              return { kind: 'error', text: 'The virtual-display scene is not registered.' }
-            }
-            return { kind: 'success', text: '' }
-          },
+        tui.tuiScenes.register({
+          id: 'virtual-display',
+          title: 'Virtual display',
+          component: (sceneProps) => VirtualDisplayScene({ ...sceneProps, origin: resolveOrigin() }),
         }),
-      'virtual-display: /display command',
+      'virtual-display: tui scene',
     )
+
+    // A slash command is the natural way to open a whole-screen view. The
+    // handler signature and the result union are dsh-commands': `{ kind:
+    // 'success', text }` with `text` empty, so the conversation is not disturbed.
+    tui.inject(['commands'], (scope) => {
+      scope.effect(
+        () =>
+          scope.commands.register({
+            name: 'display',
+            description: 'Open the private virtual display (live preview + input)',
+            recordInput: false,
+            handler: async () => {
+              const origin = resolveOrigin()
+              if (origin === undefined) {
+                return {
+                  kind: 'error',
+                  text: 'No web carrier is listening, so the panel routes are unreachable. Enable webPanel and a webserver in this profile.',
+                }
+              }
+              const opened = scope.tuiScenes.open('virtual-display')
+              if (opened !== true) {
+                return { kind: 'error', text: 'The virtual-display scene is not registered.' }
+              }
+              return { kind: 'success', text: '' }
+            },
+          }),
+        'virtual-display: /display command',
+      )
+    })
   })
 }

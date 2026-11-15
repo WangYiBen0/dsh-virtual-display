@@ -155,6 +155,7 @@ node .scratch/wayland-input-test.mjs # Wayland E2E：wtype 真的到达页面
 node .scratch/panel-test.mjs         # 面板路由跑在真实 HTTP 监听上
 node .scratch/i18n-test.mjs          # 面板词典：键对齐、占位符、无硬编码文案
 node .scratch/tui-test.mjs           # TUI 场景/命令注册与 origin 解析
+node .scratch/inject-guard-test.mjs  # 任何模块都不得在 ctx.inject 之外读取服务
 node .scratch/audio-test.mjs         # 音频进入会话 sink，而不是扬声器
 node .scratch/view-test.mjs          # view 配方只指向私有会话
 node .scratch/manager-test.mjs       # 管理器 E2E：inspect/start/capture/stop/dispose
