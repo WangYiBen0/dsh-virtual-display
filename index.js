@@ -11,6 +11,12 @@
 // The tool is `virtual_display`. Every session it hands out is built from an
 // environment with the user's DISPLAY / WAYLAND_DISPLAY stripped out, so a
 // misbehaving caller physically cannot land on the live session.
+//
+// Beyond capture, the plugin can also drive a session with synthetic input,
+// show it live in a right-Sidebar tab, and route its audio into a per-session
+// silent sink. The panel is switched off with `webPanel: false`, audio falls
+// back to the default device with `audio: 'inherit'`, and each degrades on its
+// own when the host lacks the needed tools.
 
 import Schema from '@deepseek-ai/schemastery'
 import { createVirtualDisplayTool, VirtualDisplayManager } from './src/tool.js'
@@ -35,7 +41,7 @@ export const Config = Schema.object({
   defaultHeight: Schema.natural().min(64).max(4320).default(800)
     .description('Default virtual display height in pixels.'),
   webPanel: Schema.boolean().default(true).description(
-    'Serve the live-preview panel routes under /virtual-display. Disable to keep the HTTP surface closed.',
+    'Serve the live-preview routes under /virtual-display, used by the right-Sidebar "Virtual display" tab. Disable to keep the HTTP surface closed.',
   ),
   audio: Schema.union(['null-sink', 'inherit']).default('null-sink').description(
     'Audio isolation for renderers. `null-sink` routes each session into its own silent sink; `inherit` plays through the default device.',

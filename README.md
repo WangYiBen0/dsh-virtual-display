@@ -10,7 +10,7 @@ Three capabilities, each usable on its own:
 - **A private display** — boot it, render into it, capture real pixels.
 - **Synthetic input** — type, click, and scroll into what was rendered, so an agent can operate a
   GUI instead of only photographing it.
-- **A live panel** — watch the display from the composer, and click into it yourself.
+- **A live panel** — watch the display from a right-Sidebar tab, and click into it yourself.
 - **Silent audio** — each session's sound goes to its own sink, never to your speakers.
 
 ## Why
@@ -72,7 +72,12 @@ because `wtype` creates its own virtual keyboard.
 A **right-Sidebar tab** polls one PNG from `/virtual-display/frame` and posts clicks back to
 `/virtual-display/input`. It lives in the Sidebar rather than under the composer because a live
 frame is viewport, not input furniture: it needs room, its own lifetime, and it should not push the
-conversation around or vanish when you leave the input box. Clicking the frame sends a click at that point, rescaled by
+conversation around or vanish when you leave the input box.
+
+All panel text goes through the Client locale service (`ctx.locale.register` plus a slot-level
+`locale:` namespace), with Simplified Chinese and English dictionaries kept key-identical.
+`node .scratch/i18n-test.mjs` fails on a missing key, a placeholder that differs between languages,
+or user-visible prose hardcoded in the component. Clicking the frame sends a click at that point, rescaled by
 `naturalWidth/clientWidth` so it lands where you clicked even when the frame is displayed smaller
 than the display it came from.
 
@@ -179,6 +184,7 @@ node .scratch/wayland-test.mjs      # Wayland E2E: headless compositor -> grim -
 node .scratch/input-test.mjs        # X11 E2E: type + click reach a real page
 node .scratch/wayland-input-test.mjs # Wayland E2E: wtype reaches a real page
 node .scratch/panel-test.mjs        # panel routes over a real HTTP listener
+node .scratch/i18n-test.mjs         # panel dictionaries: parity, placeholders, no hardcoded prose
 node .scratch/audio-test.mjs        # audio lands in the session sink, not the speakers
 node .scratch/view-test.mjs         # `view` recipes point at the private session, not yours
 node .scratch/manager-test.mjs      # manager E2E: inspect/start/capture/stop/dispose

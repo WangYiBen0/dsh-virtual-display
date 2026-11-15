@@ -20,6 +20,69 @@ window.__ModuleLoader__.load({
     const KIND = 'virtual-display'
     const TAB_ID = 'dsh-virtual-display'
 
+    // Every visible string lives here; `zh` is the key-set source of truth and
+    // `en` must stay key-identical. The factory cannot import a sibling module,
+    // so the dictionaries are inline.
+    const NS = 'virtualDisplay'
+    const zh = {
+      'tab.title': '虚拟显示器',
+      'tab.description': '实时查看一块私有虚拟显示器，并直接点进去操作。',
+      'empty.title': '还没有运行中的虚拟显示器。',
+      'empty.hint': '让 Agent 用 virtual_display 工具执行 action: "start"，然后重新打开此标签页。',
+      'picker.aria': '虚拟显示器会话',
+      'session.option': '{backend} {display} — {id}',
+      'frame.waiting': '正在等待画面…',
+      'frame.paused': '已暂停。',
+      'frame.alt': '私有虚拟显示器画面',
+      'frame.hint': '点击画面即可在该位置发送一次点击。',
+      'action.enter': '回车',
+      'action.scroll': '滚动',
+      'action.refresh': '刷新',
+      'action.pause': '暂停',
+      'action.resume': '继续',
+      'action.slow': '慢速',
+      'action.fast': '快速',
+      'audio.sink': '音频 → {sink}',
+      'error.frame': '无法获取画面：{message}',
+      'error.list': '无法获取会话列表：{message}',
+      'error.rejected': '操作被拒绝：{message}',
+    }
+    const en = {
+      'tab.title': 'Virtual display',
+      'tab.description': 'Watch a private virtual display live and click into it.',
+      'empty.title': 'No live virtual display yet.',
+      'empty.hint': 'Ask the agent to run the virtual_display tool with action: "start", then reopen this tab.',
+      'picker.aria': 'Virtual display session',
+      'session.option': '{backend} {display} — {id}',
+      'frame.waiting': 'Waiting for a frame…',
+      'frame.paused': 'Paused.',
+      'frame.alt': 'Private virtual display',
+      'frame.hint': 'Click the frame to send a click at that point.',
+      'action.enter': 'Enter',
+      'action.scroll': 'Scroll',
+      'action.refresh': 'Refresh',
+      'action.pause': 'Pause',
+      'action.resume': 'Resume',
+      'action.slow': 'Slow',
+      'action.fast': 'Fast',
+      'audio.sink': 'audio → {sink}',
+      'error.frame': 'Could not fetch frame: {message}',
+      'error.list': 'Could not fetch session list: {message}',
+      'error.rejected': 'Rejected: {message}',
+    }
+
+    /** Fallback when a slot cannot inject `t` (older host, or a bare render). */
+    function fallbackTranslate(namespace) {
+      return (key, params) => {
+        const dict = namespace === NS ? en : {}
+        const template = dict[key] ?? key
+        if (params === undefined) return template
+        return template.replace(/\{(\w+)\}/g, (whole, name) =>
+          params[name] === undefined ? whole : String(params[name]),
+        )
+      }
+    }
+
     async function getJson(path) {
       const response = await fetch(path, { credentials: 'same-origin' })
       if (!response.ok) throw new Error(`${path} answered ${response.status}`)
@@ -168,6 +231,8 @@ window.__ModuleLoader__.load({
      * display immediately.
      */
     function VirtualDisplayTab(props) {
+      // `t` is injected by the slot because the registration declares `locale`.
+      const t = props.t ?? fallbackTranslate(NS)
       const tab = props.useTabInfo?.()
       const requested = tab?.tab?.navigation?.params?.virtualDisplay?.sessionId
 
@@ -248,13 +313,9 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: styles.empty },
-            'No live virtual display yet.',
+            t('empty.title'),
             h('br'),
-            'Ask the agent to run the ',
-            h('code', null, 'virtual_display'),
-            ' tool with ',
-            h('code', null, 'action: "start"'),
-            ', then reopen this tab.',
+            t('empty.hint'),
           ),
         )
       }
@@ -265,27 +326,31 @@ window.__ModuleLoader__.load({
           style: styles.select,
           value: selected,
           onChange: (event) => setSelected(event.target.value),
-          'aria-label': 'Virtual display session',
+          'aria-label': t('picker.aria'),
         },
         sessions.map((s) =>
           h(
             'option',
             { key: s.sessionId, value: s.sessionId },
-            `${s.backend ?? s.platform ?? 'session'}${s.display !== undefined ? ` :${s.display}` : ''} — ${s.sessionId.slice(0, 8)}`,
+            t('session.option', {
+              backend: s.backend ?? s.platform ?? '',
+              display: s.display !== undefined ? `:${s.display}` : '',
+              id: s.sessionId.slice(0, 8),
+            }),
           ),
         ),
       )
 
       const frame =
         src === null
-          ? h('div', { style: styles.empty }, paused ? 'Paused.' : 'Waiting for a frame…')
+          ? h('div', { style: styles.empty }, paused ? t('frame.paused') : t('frame.waiting'))
           : h(
               'div',
               { style: styles.stage },
               h('img', {
                 ref: imageRef,
                 src,
-                alt: 'Private virtual display',
+                alt: t('frame.alt'),
                 style: styles.image,
                 onClick,
               }),
@@ -302,32 +367,32 @@ window.__ModuleLoader__.load({
           h(
             'button',
             { type: 'button', style: styles.button, onClick: () => void inject({ kind: 'key', key: 'Return' }), disabled: selected === '' },
-            'Enter',
+            t('action.enter'),
           ),
           h(
             'button',
             { type: 'button', style: styles.button, onClick: () => void inject({ kind: 'scroll', direction: 'down', amount: 3 }), disabled: selected === '' },
-            'Scroll',
+            t('action.scroll'),
           ),
           h(
             'button',
             { type: 'button', style: styles.button, onClick: () => setNonce((n) => n + 1) },
-            'Refresh',
+            t('action.refresh'),
           ),
           h(
             'button',
             { type: 'button', style: styles.button, onClick: () => setPaused((v) => !v) },
-            paused ? 'Resume' : 'Pause',
+            paused ? t('action.resume') : t('action.pause'),
           ),
           h(
             'button',
             { type: 'button', style: styles.button, onClick: () => setIntervalMs((ms) => (ms === 1000 ? 3000 : 1000)) },
-            intervalMs === 1000 ? 'Slow' : 'Fast',
+            intervalMs === 1000 ? t('action.slow') : t('action.fast'),
           ),
         ),
-        h('div', { style: styles.hint }, 'Click the frame to send a click at that point.'),
+        h('div', { style: styles.hint }, t('frame.hint')),
         target?.audio?.isolated === true
-          ? h('div', { style: styles.hint }, `audio → ${target.audio.sink}`)
+          ? h('div', { style: styles.hint }, t('audio.sink', { sink: target.audio.sink }))
           : null,
         target?.warning !== undefined ? h('div', { style: styles.hint }, target.warning) : null,
         listError !== null ? h('div', { style: styles.error }, listError) : null,
@@ -337,13 +402,20 @@ window.__ModuleLoader__.load({
     }
 
     /** The tab chip's title; falls back to the registry's captured text. */
-    function VirtualDisplayTitle() {
-      return 'Virtual display'
+    function VirtualDisplayTitle(props) {
+      const t = props?.t ?? fallbackTranslate(NS)
+      return t('tab.title')
     }
 
     return {
-      inject: ['slots', 'sidebarRightTabs', 'sidebarRight'],
+      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],
       apply(ctx) {
+        // Register the dictionaries first: everything below translates through
+        // this namespace, and the Sidebar reads tab titles lazily but the guide
+        // and chip can be read immediately.
+        ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'virtual-display: dictionaries')
+        const t = ctx.locale.bind(NS)
+
         // The tab type: what "virtual display" means as a page kind.
         ctx.effect(
           () =>
@@ -355,25 +427,32 @@ window.__ModuleLoader__.load({
               // A live preview is only worth anything while it is on screen.
               keepMounted: false,
               priority: 'extension',
-              title: () => 'Virtual display',
+              title: () => t('tab.title'),
               guide: [
                 {
                   id: TAB_ID,
                   order: 60,
-                  title: () => 'Virtual display',
-                  description: () => 'Watch a private virtual display live and click into it.',
+                  title: () => t('tab.title'),
+                  description: () => t('tab.description'),
                 },
               ],
             }),
           'virtual-display: sidebar tab type',
         )
 
-        // The body, dispatched by kind.
+        // The body and chip, dispatched by kind. `locale: NS` is what makes the
+        // framework inject `t` into each component.
         ctx.slots.inject('sidebar.right.pane.tab', () =>
-          ctx.slots.register({ name: 'sidebar.right.pane.tab', key: TAB_ID }, VirtualDisplayTab),
+          ctx.slots.register(
+            { name: 'sidebar.right.pane.tab', key: TAB_ID, locale: NS },
+            VirtualDisplayTab,
+          ),
         )
         ctx.slots.inject('sidebar.right.pane.tab.title', () =>
-          ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: TAB_ID }, VirtualDisplayTitle),
+          ctx.slots.register(
+            { name: 'sidebar.right.pane.tab.title', key: TAB_ID, locale: NS },
+            VirtualDisplayTitle,
+          ),
         )
       },
     }

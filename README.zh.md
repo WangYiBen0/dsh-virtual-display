@@ -54,7 +54,9 @@ headless wlroots 合成器上的指针注入是已知限制：seat 报 `capabili
 
 ### 实时面板
 
-**右侧栏的一个 Tab**，按 1–3 fps 从 `/virtual-display/frame` 轮询一张 PNG，并把点击 POST 到 `/virtual-display/input`。放在侧栏而不是输入框下面，是因为实时画面属于「视口」而不是「输入控件」：它需要空间、有自己的生命周期，不该挤动对话，也不该在你离开输入框时消失。点画面即按该点发送点击，坐标会按 `naturalWidth/clientWidth` 缩放，所以画面被缩小显示时也能点准。
+**右侧栏的一个 Tab**，按 1–3 fps 从 `/virtual-display/frame` 轮询一张 PNG，并把点击 POST 到 `/virtual-display/input`。放在侧栏而不是输入框下面，是因为实时画面属于「视口」而不是「输入控件」：它需要空间、有自己的生命周期，不该挤动对话，也不该在你离开输入框时消失。
+
+面板所有文案都走 Client locale 服务（`ctx.locale.register` 加 slot 级别的 `locale:` 命名空间），简体中文与英文词典保持键完全一致。`node .scratch/i18n-test.mjs` 会在缺键、两种语言的占位符不一致、或组件里硬编码了可见文案时报错。点画面即按该点发送点击，坐标会按 `naturalWidth/clientWidth` 缩放，所以画面被缩小显示时也能点准。
 
 这些路由挂在 Harness 自己的 Web 服务器上，面板与页面同源，不额外开端口。设 `webPanel: false` 可完全不注册它们。
 
@@ -133,6 +135,7 @@ node .scratch/wayland-test.mjs       # Wayland E2E：headless 合成器 -> grim 
 node .scratch/input-test.mjs         # X11 E2E：打字与点击真的到达页面
 node .scratch/wayland-input-test.mjs # Wayland E2E：wtype 真的到达页面
 node .scratch/panel-test.mjs         # 面板路由跑在真实 HTTP 监听上
+node .scratch/i18n-test.mjs          # 面板词典：键对齐、占位符、无硬编码文案
 node .scratch/audio-test.mjs         # 音频进入会话 sink，而不是扬声器
 node .scratch/view-test.mjs          # view 配方只指向私有会话
 node .scratch/manager-test.mjs       # 管理器 E2E：inspect/start/capture/stop/dispose

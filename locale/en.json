@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Virtual display",
-    "description": "Provision a throwaway virtual display, drive it with synthetic input, and watch it live in the composer panel — without disturbing the session you are working in."
+    "description": "Provision a throwaway virtual display, drive it with synthetic input, watch it live in the right Sidebar, and keep its audio out of your speakers — without disturbing the session you are working in."
   }
 }
