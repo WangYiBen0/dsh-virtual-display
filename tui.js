@@ -308,26 +308,15 @@ function VirtualDisplayScene(props) {
  * cannot open.
  */
 export function applyTui(ctx, options = {}) {
-  // Diagnostics: this plugin has been silent in the TUI twice, and silence is
-  // indistinguishable from "never activated". These lines say which branch ran.
-  // dsh-tui surfaces plugin console output with the entry name, so they cost
-  // nothing at rest and answer the question immediately when something is off.
-  const log = (message) => {
-    // eslint-disable-next-line no-console
-    console.log(`[dsh-virtual-display] ${message}`)
-  }
-
+  // Deliberately silent on the happy path. Activation logging existed only to
+  // disambiguate "the plugin never ran" while this surface was being brought
+  // up, and it cannot stay: in a Web-only profile `tuiScenes` is absent by
+  // design, so a startup line would report normal operation as a problem.
+  // Failures that matter surface through the command's own error result.
   const scenesPresent = ctx.reflect?.get?.('tuiScenes') !== undefined
-  const commandsPresent = ctx.reflect?.get?.('commands') !== undefined
-  log(`tui: service probe — tuiScenes=${scenesPresent} commands=${commandsPresent}`)
-
-  if (!scenesPresent) {
-    log('tui: no tuiScenes in this profile; the /display scene is not registered')
-    return
-  }
+  if (!scenesPresent) return
 
   ctx.inject(['tuiScenes'], (tui) => {
-    log('tui: tuiScenes injected')
     /**
      * Resolve the HTTP origin of this process's web carrier.
      *
@@ -355,14 +344,11 @@ export function applyTui(ctx, options = {}) {
         }),
       'virtual-display: tui scene',
     )
-    log('tui: scene "virtual-display" registered')
 
     // A slash command is the natural way to open a whole-screen view. The
     // handler signature and the result union are dsh-commands': `{ kind:
     // 'success', text }` with `text` empty, so the conversation is not disturbed.
-    log(`tui: commands present = ${tui.reflect?.get?.('commands') !== undefined}`)
     tui.inject(['commands', 'tuiScenes'], (scope) => {
-      log('tui: commands injected')
       scope.effect(
         () =>
           scope.commands.register({
@@ -387,7 +373,6 @@ export function applyTui(ctx, options = {}) {
           }),
         'virtual-display: /display command',
       )
-      log('tui: command "display" registered')
     })
   })
 }
