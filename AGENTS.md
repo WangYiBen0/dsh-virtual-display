@@ -32,7 +32,7 @@ src/
     wayland.js            Nested private compositor or xwayland fallback to X11
     windows.js            PowerShell + .NET GDI+ CopyFromScreen
     macos.js              screencapture (-l <windowId> when known)
-client.js                 Web panel: composer-dock decoration (live frame + click injection)
+client.js                 Web panel: right-Sidebar tab type (live frame + click injection)
 docs/
   ENVIRONMENT-PROBE.md    Verified host probe notes (flags, paths, symptoms)
 .scratch/                 Local experiments/tests (smoke.mjs, manager-test.mjs, logs); not package output
@@ -92,6 +92,7 @@ The plugin exists so the user is never interrupted. Tests are not exempt, and th
 - **`view` action**: reports attach commands only; it must never start a listener or spawn a viewer.
 - **`input` action**: normalise through `normalizeInput()` and dispatch via `InputInjector`; never build injection argv by hand in the tool layer. Focus is handled *inside* the injector because a missing focus is silent — keys simply go nowhere.
 - **`wtype` needs `-s`**: it advertises its keymap asynchronously and drops the first character of every invocation without it. This is correctness, not timing tuning.
+- **Panel UI home**: the panel is a **right-Sidebar tab** (`sidebarRightTabs.register` + the `sidebar.right.pane.tab` / `.title` keyed seats), not a composer decoration. A live frame is viewport, not input furniture — it must not be squeezed under the composer or disappear with it. Session selection arrives through the tab's navigation params (`{ virtualDisplay: { sessionId } }`).
 - **Panel routes**: registered through `ctx.inject(['webServer'], ...)` + `ctx.effect` in `src/panel.js`, under `/virtual-display`. Session lookup is by opaque id via `manager.peekSession`; request bodies are capped. Do not add a route that accepts an arbitrary argv.
 - **Audio isolation**: `AudioIsolation` owns one null sink per session. Claiming isolation requires the sink to be **observed** in `pw-dump`; `pw-cli`'s exit code is not evidence.
 

@@ -8,7 +8,7 @@
 
 - **私有显示器** —— 启动、渲染、截取真实像素。
 - **合成输入** —— 往渲染结果里打字、点击、滚动，让 Agent 真正*操作*界面而不只是拍照。
-- **实时面板** —— 在输入区直接看这块显示器，并亲手点进去。
+- **实时面板** —— 在**右侧栏**直接看这块显示器，并亲手点进去。
 - **静音音频** —— 每个会话的声音进入自己的 sink，永远不到你的扬声器。
 
 ## 为什么需要它
@@ -54,7 +54,7 @@ headless wlroots 合成器上的指针注入是已知限制：seat 报 `capabili
 
 ### 实时面板
 
-输入区（composer dock）里的一个组件，按 1–3 fps 从 `/virtual-display/frame` 轮询一张 PNG，并把点击 POST 到 `/virtual-display/input`。点画面即按该点发送点击，坐标会按 `naturalWidth/clientWidth` 缩放，所以画面被缩小显示时也能点准。
+**右侧栏的一个 Tab**，按 1–3 fps 从 `/virtual-display/frame` 轮询一张 PNG，并把点击 POST 到 `/virtual-display/input`。放在侧栏而不是输入框下面，是因为实时画面属于「视口」而不是「输入控件」：它需要空间、有自己的生命周期，不该挤动对话，也不该在你离开输入框时消失。点画面即按该点发送点击，坐标会按 `naturalWidth/clientWidth` 缩放，所以画面被缩小显示时也能点准。
 
 这些路由挂在 Harness 自己的 Web 服务器上，面板与页面同源，不额外开端口。设 `webPanel: false` 可完全不注册它们。
 
@@ -121,7 +121,7 @@ src/exec.js               可执行文件解析（宿主 -> PATH -> profile -> n
 src/input.js              合成键鼠注入（X11 / Wayland / Windows / macOS）
 src/panel.js              Web 实时面板的 HTTP 路由
 src/audio.js              每会话 null sink 与音频路由
-client.js                 Web 面板：输入区组件（实时画面 + 点击注入）
+client.js                 Web 面板：右侧栏 Tab（实时画面 + 点击注入）
 src/backends/             x11、wayland、windows、macos 后端
 ```
 

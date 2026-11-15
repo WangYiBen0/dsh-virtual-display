@@ -1,14 +1,14 @@
-// Web panel: live frames from a private display, plus click-to-inject.
+// Web panel: a right-Sidebar tab that shows a private display live.
 //
-// The panel is a decoration in the composer dock, not a full page: it belongs
-// next to the conversation it is helping with. Frames are polled from
-// /virtual-display/frame and clicks are posted to /virtual-display/input, so the
-// panel needs no state of its own beyond which session it is watching.
+// Why a Sidebar tab and not a composer decoration: a live frame is viewport, not
+// input furniture. It has its own chrome and its own lifetime, it should survive
+// you leaving the composer, and it must not push the conversation around. The
+// right Sidebar gives it a tab, a close affordance, and room to breathe.
 //
-// Deliberately polls rather than streams. An SSE channel would be smoother, but
-// a timer is trivially disposable and cannot leak a socket when the slot
-// unmounts — and at 2 fps the difference is invisible for a config-debugging
-// panel.
+// The panel polls one PNG from /virtual-display/frame and posts events back to
+// /virtual-display/input. Polling (not SSE) because a timer is trivially
+// disposable and cannot leak a socket when the tab unmounts; at 1-3 fps the
+// difference is invisible for a config-debugging panel.
 window.__ModuleLoader__.load({
   id: 'dsh-virtual-display',
   factory(require) {
@@ -17,6 +17,8 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useRef, useState } = React
 
     const BASE = '/virtual-display'
+    const KIND = 'virtual-display'
+    const TAB_ID = 'dsh-virtual-display'
 
     async function getJson(path) {
       const response = await fetch(path, { credentials: 'same-origin' })
@@ -24,21 +26,20 @@ window.__ModuleLoader__.load({
       return response.json()
     }
 
-    /** Poll the live sessions list, so the picker reflects reality. */
-    function useSessions(active) {
+    /** Poll the live session list while the tab is visible. */
+    function useSessions(visible) {
       const [sessions, setSessions] = useState([])
       const [error, setError] = useState(null)
 
       useEffect(() => {
-        if (!active) return undefined
+        if (!visible) return undefined
         let cancelled = false
         const tick = async () => {
           try {
             const data = await getJson(`${BASE}/sessions`)
-            if (!cancelled) {
-              setSessions(data.sessions ?? [])
-              setError(null)
-            }
+            if (cancelled) return
+            setSessions(data.sessions ?? [])
+            setError(null)
           } catch (cause) {
             if (!cancelled) setError(cause.message)
           }
@@ -49,7 +50,7 @@ window.__ModuleLoader__.load({
           cancelled = true
           clearInterval(timer)
         }
-      }, [active])
+      }, [visible])
 
       return { sessions, error }
     }
@@ -57,15 +58,15 @@ window.__ModuleLoader__.load({
     /**
      * Poll one session's frame.
      *
-     * `nonce` forces a refetch after an injection, so the picture updates
-     * immediately instead of waiting for the next interval.
+     * `nonce` forces a refetch after an injection so the picture updates at once
+     * instead of waiting for the next tick.
      */
-    function useFrame(sessionId, active, nonce, intervalMs) {
+    function useFrame(sessionId, visible, nonce, intervalMs) {
       const [src, setSrc] = useState(null)
       const [error, setError] = useState(null)
 
       useEffect(() => {
-        if (!active || sessionId === undefined) {
+        if (!visible || sessionId === undefined || sessionId === '') {
           setSrc(null)
           return undefined
         }
@@ -98,18 +99,21 @@ window.__ModuleLoader__.load({
           clearInterval(timer)
           if (objectUrl !== undefined) URL.revokeObjectURL(objectUrl)
         }
-      }, [sessionId, active, nonce, intervalMs])
+      }, [sessionId, visible, nonce, intervalMs])
 
       return { src, error }
     }
 
+    // Inherit the host theme: only --dsw-alias-* tokens and inherited colours.
     const styles = {
       root: {
         display: 'flex',
         flexDirection: 'column',
-        gap: '6px',
-        padding: '8px 0 4px',
-        width: '100%',
+        gap: '8px',
+        padding: '10px',
+        height: '100%',
+        boxSizing: 'border-box',
+        overflow: 'auto',
         fontSize: '12px',
         color: 'var(--dsw-alias-text-secondary, #8a8f98)',
       },
@@ -117,7 +121,7 @@ window.__ModuleLoader__.load({
       select: {
         flex: '1 1 auto',
         minWidth: '0',
-        padding: '3px 6px',
+        padding: '4px 6px',
         borderRadius: '6px',
         border: '1px solid var(--dsw-alias-border, #3a3f46)',
         background: 'var(--dsw-alias-surface, transparent)',
@@ -125,7 +129,7 @@ window.__ModuleLoader__.load({
         fontSize: '12px',
       },
       button: {
-        padding: '3px 10px',
+        padding: '4px 10px',
         borderRadius: '6px',
         border: '1px solid var(--dsw-alias-border, #3a3f46)',
         background: 'var(--dsw-alias-surface, transparent)',
@@ -140,38 +144,55 @@ window.__ModuleLoader__.load({
         overflow: 'hidden',
         border: '1px solid var(--dsw-alias-border, #3a3f46)',
         background: '#111',
+        // The frame is the point of the tab, so it takes the available height.
+        flex: '1 1 auto',
+        minHeight: '120px',
+        display: 'flex',
+        alignItems: 'center',
       },
       image: { width: '100%', height: 'auto', display: 'block', cursor: 'crosshair' },
       hint: { fontSize: '11px', opacity: 0.7 },
-      error: { color: 'var(--dsw-alias-danger, #e5484d)', fontSize: '11px', wordBreak: 'break-word' },
-      empty: { fontSize: '11px', opacity: 0.7, padding: '4px 0' },
+      error: {
+        color: 'var(--dsw-alias-danger, #e5484d)',
+        fontSize: '11px',
+        wordBreak: 'break-word',
+      },
+      empty: { fontSize: '12px', opacity: 0.7, lineHeight: 1.5 },
     }
 
-    function VirtualDisplayPanel(props) {
-      // Render only where a session is in scope; the dock is ambient otherwise.
-      const sessionId = props?.sessionId ?? props?.session?.id
-      const [open, setOpen] = useState(false)
-      const [selected, setSelected] = useState(sessionId ?? '')
+    /**
+     * The tab body.
+     *
+     * `useTabInfo` is supplied by the Sidebar framework and carries the tab's
+     * navigation params, so opening the tab with `{ sessionId }` selects that
+     * display immediately.
+     */
+    function VirtualDisplayTab(props) {
+      const tab = props.useTabInfo?.()
+      const requested = tab?.tab?.navigation?.params?.virtualDisplay?.sessionId
+
+      const [selected, setSelected] = useState(requested ?? '')
       const [nonce, setNonce] = useState(0)
       const [note, setNote] = useState(null)
       const [intervalMs, setIntervalMs] = useState(1000)
+      const [paused, setPaused] = useState(false)
       const imageRef = useRef(null)
 
-      const { sessions, error: listError } = useSessions(open)
-      const { src, error: frameError } = useFrame(
-        selected === '' ? undefined : selected,
-        open,
-        nonce,
-        intervalMs,
-      )
+      const { sessions, error: listError } = useSessions(!paused)
+      const { src, error: frameError } = useFrame(selected, !paused, nonce, intervalMs)
+
+      // Follow the requested session when the tab is re-pointed.
+      useEffect(() => {
+        if (requested !== undefined && requested !== selected) setSelected(requested)
+      }, [requested])
 
       // Keep the selection valid as sessions come and go.
       useEffect(() => {
-        if (!open) return
         if (sessions.length === 0) return
-        const stillThere = sessions.some((s) => s.sessionId === selected)
-        if (!stillThere) setSelected(sessions[0].sessionId)
-      }, [sessions, selected, open])
+        if (!sessions.some((s) => s.sessionId === selected)) {
+          setSelected(sessions[0].sessionId)
+        }
+      }, [sessions, selected])
 
       const inject = useCallback(
         async (payload) => {
@@ -192,7 +213,6 @@ window.__ModuleLoader__.load({
               return
             }
             setNote(null)
-            // Refresh straight away so the click feels immediate.
             setNonce((n) => n + 1)
           } catch (cause) {
             setNote(cause.message)
@@ -202,20 +222,18 @@ window.__ModuleLoader__.load({
       )
 
       /**
-       * Translate a click on the <img> into display pixels.
+       * Translate a click on the frame into display pixels.
        *
-       * The frame is scaled to the panel width, so the offset has to be
-       * rescaled by naturalWidth/offsetWidth or every click lands short.
+       * The image is laid out at whatever width the Sidebar has, so the offset
+       * must be rescaled by naturalWidth/clientWidth or every click lands short.
        */
       const onClick = useCallback(
         (event) => {
           const image = imageRef.current
           if (image === null || image.naturalWidth === 0) return
           const rect = image.getBoundingClientRect()
-          const scaleX = image.naturalWidth / rect.width
-          const scaleY = image.naturalHeight / rect.height
-          const x = Math.round((event.clientX - rect.left) * scaleX)
-          const y = Math.round((event.clientY - rect.top) * scaleY)
+          const x = Math.round((event.clientX - rect.left) * (image.naturalWidth / rect.width))
+          const y = Math.round((event.clientY - rect.top) * (image.naturalHeight / rect.height))
           void inject({ kind: 'click', x, y })
         },
         [inject],
@@ -223,101 +241,94 @@ window.__ModuleLoader__.load({
 
       const target = sessions.find((s) => s.sessionId === selected)
 
-      const toggle = h(
-        'button',
-        {
-          type: 'button',
-          style: styles.button,
-          onClick: () => setOpen((value) => !value),
-          'aria-expanded': open,
-        },
-        open ? 'Hide virtual display' : 'Virtual display',
-      )
-
-      if (!open) {
-        return h('div', { style: styles.root }, h('div', { style: styles.row }, toggle))
+      if (sessions.length === 0 && listError === null) {
+        return h(
+          'div',
+          { style: styles.root },
+          h(
+            'div',
+            { style: styles.empty },
+            'No live virtual display yet.',
+            h('br'),
+            'Ask the agent to run the ',
+            h('code', null, 'virtual_display'),
+            ' tool with ',
+            h('code', null, 'action: "start"'),
+            ', then reopen this tab.',
+          ),
+        )
       }
 
-      const picker =
-        sessions.length === 0
-          ? h('span', { style: styles.empty }, 'No live sessions. Start one with the virtual_display tool.')
-          : h(
-              'select',
-              {
-                style: styles.select,
-                value: selected,
-                onChange: (event) => setSelected(event.target.value),
-                'aria-label': 'Virtual display session',
-              },
-              sessions.map((s) =>
-                h(
-                  'option',
-                  { key: s.sessionId, value: s.sessionId },
-                  `${s.backend ?? s.platform ?? 'session'}${s.display !== undefined ? ` :${s.display}` : ''} — ${s.sessionId.slice(0, 8)}`,
-                ),
-              ),
-            )
+      const picker = h(
+        'select',
+        {
+          style: styles.select,
+          value: selected,
+          onChange: (event) => setSelected(event.target.value),
+          'aria-label': 'Virtual display session',
+        },
+        sessions.map((s) =>
+          h(
+            'option',
+            { key: s.sessionId, value: s.sessionId },
+            `${s.backend ?? s.platform ?? 'session'}${s.display !== undefined ? ` :${s.display}` : ''} — ${s.sessionId.slice(0, 8)}`,
+          ),
+        ),
+      )
 
       const frame =
         src === null
-          ? h('div', { style: styles.empty }, 'Waiting for a frame…')
-          : h('div', { style: styles.stage },
+          ? h('div', { style: styles.empty }, paused ? 'Paused.' : 'Waiting for a frame…')
+          : h(
+              'div',
+              { style: styles.stage },
               h('img', {
                 ref: imageRef,
                 src,
                 alt: 'Private virtual display',
                 style: styles.image,
                 onClick,
-              }))
+              }),
+            )
 
       return h(
         'div',
         { style: styles.root },
-        h('div', { style: styles.row }, toggle, picker),
+        h('div', { style: styles.row }, picker),
         frame,
         h(
           'div',
           { style: styles.row },
           h(
             'button',
-            {
-              type: 'button',
-              style: styles.button,
-              onClick: () => void inject({ kind: 'key', key: 'Return' }),
-              disabled: selected === '',
-            },
+            { type: 'button', style: styles.button, onClick: () => void inject({ kind: 'key', key: 'Return' }), disabled: selected === '' },
             'Enter',
           ),
           h(
             'button',
-            {
-              type: 'button',
-              style: styles.button,
-              onClick: () => void inject({ kind: 'scroll', direction: 'down', amount: 3 }),
-              disabled: selected === '',
-            },
+            { type: 'button', style: styles.button, onClick: () => void inject({ kind: 'scroll', direction: 'down', amount: 3 }), disabled: selected === '' },
             'Scroll',
           ),
           h(
             'button',
-            {
-              type: 'button',
-              style: styles.button,
-              onClick: () => setNonce((n) => n + 1),
-            },
+            { type: 'button', style: styles.button, onClick: () => setNonce((n) => n + 1) },
             'Refresh',
           ),
           h(
             'button',
-            {
-              type: 'button',
-              style: styles.button,
-              onClick: () => setIntervalMs((ms) => (ms === 1000 ? 3000 : 1000)),
-            },
+            { type: 'button', style: styles.button, onClick: () => setPaused((v) => !v) },
+            paused ? 'Resume' : 'Pause',
+          ),
+          h(
+            'button',
+            { type: 'button', style: styles.button, onClick: () => setIntervalMs((ms) => (ms === 1000 ? 3000 : 1000)) },
             intervalMs === 1000 ? 'Slow' : 'Fast',
           ),
         ),
         h('div', { style: styles.hint }, 'Click the frame to send a click at that point.'),
+        target?.audio?.isolated === true
+          ? h('div', { style: styles.hint }, `audio → ${target.audio.sink}`)
+          : null,
         target?.warning !== undefined ? h('div', { style: styles.hint }, target.warning) : null,
         listError !== null ? h('div', { style: styles.error }, listError) : null,
         frameError !== null ? h('div', { style: styles.error }, frameError) : null,
@@ -325,14 +336,44 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** The tab chip's title; falls back to the registry's captured text. */
+    function VirtualDisplayTitle() {
+      return 'Virtual display'
+    }
+
     return {
-      inject: ['slots'],
+      inject: ['slots', 'sidebarRightTabs', 'sidebarRight'],
       apply(ctx) {
-        ctx.slots.inject('conversation.composer.dock', () =>
-          ctx.slots.register(
-            { name: 'conversation.composer.dock', id: 'virtual-display-panel', order: 40 },
-            VirtualDisplayPanel,
-          ),
+        // The tab type: what "virtual display" means as a page kind.
+        ctx.effect(
+          () =>
+            ctx.sidebarRightTabs.register({
+              id: TAB_ID,
+              kind: KIND,
+              // One display at a time; a second tab of this kind is the same page.
+              multiple: false,
+              // A live preview is only worth anything while it is on screen.
+              keepMounted: false,
+              priority: 'extension',
+              title: () => 'Virtual display',
+              guide: [
+                {
+                  id: TAB_ID,
+                  order: 60,
+                  title: () => 'Virtual display',
+                  description: () => 'Watch a private virtual display live and click into it.',
+                },
+              ],
+            }),
+          'virtual-display: sidebar tab type',
+        )
+
+        // The body, dispatched by kind.
+        ctx.slots.inject('sidebar.right.pane.tab', () =>
+          ctx.slots.register({ name: 'sidebar.right.pane.tab', key: TAB_ID }, VirtualDisplayTab),
+        )
+        ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+          ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: TAB_ID }, VirtualDisplayTitle),
         )
       },
     }

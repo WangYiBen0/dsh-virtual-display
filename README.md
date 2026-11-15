@@ -69,8 +69,10 @@ because `wtype` creates its own virtual keyboard.
 
 ### The live panel
 
-A composer-dock decoration polls one PNG from `/virtual-display/frame` and posts clicks back to
-`/virtual-display/input`. Clicking the frame sends a click at that point, rescaled by
+A **right-Sidebar tab** polls one PNG from `/virtual-display/frame` and posts clicks back to
+`/virtual-display/input`. It lives in the Sidebar rather than under the composer because a live
+frame is viewport, not input furniture: it needs room, its own lifetime, and it should not push the
+conversation around or vanish when you leave the input box. Clicking the frame sends a click at that point, rescaled by
 `naturalWidth/clientWidth` so it lands where you clicked even when the frame is displayed smaller
 than the display it came from.
 
