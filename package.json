@@ -3,6 +3,29 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Provision an isolated virtual display, drive it with synthetic input, and watch it live from the Web panel.",
+  "license": "MIT",
+  "author": {
+    "name": "WangYiBen0",
+    "email": "wangyiben1@outlook.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WangYiBen0/dsh-virtual-display.git"
+  },
+  "homepage": "https://github.com/WangYiBen0/dsh-virtual-display#readme",
+  "bugs": {
+    "url": "https://github.com/WangYiBen0/dsh-virtual-display/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "virtual-display",
+    "xvfb",
+    "wayland",
+    "headless",
+    "automation"
+  ],
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -18,6 +41,13 @@
     "locale/*.json",
     "icon.svg"
   ],
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.2",
+    "@deepseek-ai/schemastery": "3.19.0"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
