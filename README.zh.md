@@ -121,8 +121,16 @@ Wayland 截图需要合成器实现 `wlr-screencopy`。**sway 支持，mutter �
 
 ## 安装
 
+从本地检出：
+
 ```sh
 dsh plugin install /绝对路径/dsh-virtual-display
+```
+
+从 npm：
+
+```sh
+dsh plugin install npm:dsh-virtual-display
 ```
 
 如默认值不合适，可配置 `runtimeRoot` / `defaultWidth` / `defaultHeight`。
@@ -146,6 +154,14 @@ src/backends/             x11、wayland、windows、macos 后端
 ```
 
 ## 测试
+
+`npm test` 运行守卫测试——不需要任何额外工具的那一批：
+
+```sh
+npm test
+```
+
+端到端测试需要宿主上真实存在的工具（Xvfb、PipeWire、Chromium），放在 `.scratch/`：
 
 ```sh
 node .scratch/smoke.mjs              # X11 E2E：Xvfb -> chromium -> 真实像素

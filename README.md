@@ -181,8 +181,16 @@ window. This plugin passes `--ozone-platform=x11` explicitly; see
 
 ## Install
 
+From a checkout:
+
 ```sh
 dsh plugin install /absolute/path/to/dsh-virtual-display
+```
+
+From npm:
+
+```sh
+dsh plugin install npm:dsh-virtual-display
 ```
 
 Then configure under `runtimeRoot` / `defaultWidth` / `defaultHeight` if the defaults don't suit.
@@ -202,6 +210,14 @@ src/backends/             x11, wayland, windows, macos
 ```
 
 ## Tests
+
+`npm test` runs the guard tests — the ones that need nothing installed:
+
+```sh
+npm test
+```
+
+The end-to-end tests need real tooling on the host (Xvfb, PipeWire, Chromium) and live in `.scratch/`:
 
 ```sh
 node .scratch/smoke.mjs             # X11 E2E: Xvfb -> chromium -> real pixels
