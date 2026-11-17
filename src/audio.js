@@ -168,6 +168,17 @@ export class AudioIsolation {
     }
 
     const name = `${SINK_PREFIX}${String(this.session.options.sessionId ?? process.pid).slice(0, 8)}`
+
+    // Before adding a sink of our own, clear the ones left behind by a DSH
+    // process that was killed outright. Those linger in the user's sound
+    // settings as empty "DSH virtual display" outputs, and they are ours to
+    // clean up. Once per process is enough: after this, every surviving sink
+    // either belongs to a live process or was just reaped.
+    if (!reapAttempted) {
+      reapAttempted = true
+      await reapOrphanSinks(this.session)
+    }
+
     // pw-cli takes the whole SPA-JSON properties blob as ONE argv element; it
     // has no script-file option, so a newline-separated script is not valid.
     const properties = [
@@ -178,6 +189,7 @@ export class AudioIsolation {
       'media.class = Audio/Sink',
       'object.linger = true',
       'audio.position = [ FL FR ]',
+      `${OWNER_PROP} = ${process.pid}`,
       '}',
     ].join(' ')
 
